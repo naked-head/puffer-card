@@ -1,0 +1,18 @@
+{
+  "name": "Titolo della card",
+  "min_temp": "Temp. minima (colore freddo)",
+  "max_temp": "Temp. massima (colore caldo)",
+  "entity": "Entità temperatura",
+  "label": "Etichetta",
+  "pos_top": "Posizione alta",
+  "pos_middle": "Posizione centrale",
+  "pos_bottom": "Posizione bassa",
+  "layout": "Layout",
+  "layout_normal": "Standard",
+  "layout_compact": "Compatto",
+  "default_title": "Puffer",
+  "label_top": "Mandata",
+  "label_middle": "Accumulo",
+  "label_bottom": "Ritorno",
+  "show_labels": "Mostra etichette"
+}
