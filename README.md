@@ -126,48 +126,6 @@ Each temperature is mapped to a color between `min_temp` (blue) and `max_temp`
 (red), passing through cyan, amber and orange. Tune `min_temp` / `max_temp` to
 match your system so the colors are meaningful for your typical operating range.
 
-## 🌍 Localization
-
-The UI language follows Home Assistant (`hass.locale.language`) and falls back to
-English. Translations live in **external files**, one per language, under
-`dist/translations/`. A regional code such as `it-IT` falls back to its base
-language (`it`) and finally to English.
-
-To add a language, drop a new file (e.g. `de.json`) into `dist/translations/`
-using the same keys as `en.json` — no code changes required:
-
-```json
-{
-  "name": "Card title",
-  "min_temp": "Min temperature (cold color)",
-  "max_temp": "Max temperature (hot color)",
-  "entity": "Temperature entity",
-  "label": "Label",
-  "pos_top": "Top position",
-  "pos_middle": "Middle position",
-  "pos_bottom": "Bottom position",
-  "layout": "Layout",
-  "layout_normal": "Standard",
-  "layout_compact": "Compact",
-  "show_labels": "Show labels",
-  "default_title": "Buffer tank",
-  "label_top": "Flow",
-  "label_middle": "Storage",
-  "label_bottom": "Return"
-}
-```
-
-User-provided text (`name`, labels) is never translated automatically.
-
-## 🐞 Troubleshooting
-
-- **Card not found / blank**: confirm the resource URL and that it is a
-  *JavaScript Module*; do a hard refresh (Ctrl/Cmd + Shift + R).
-- **Labels show as keys** (`label_top`, …): the translation files could not be
-  loaded — make sure the `translations/` folder sits next to `puffer-card.js`.
-- Open the browser console (F12); a line like `PUFFER-CARD v1.0.0` confirms the
-  card loaded.
-
 ## 📄 License
 
 [MIT](LICENSE)
