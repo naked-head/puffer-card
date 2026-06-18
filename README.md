@@ -1,4 +1,4 @@
-# 🛢️ Puffer Card
+# Puffer Card
 
 A custom [Home Assistant](https://www.home-assistant.io/) **Lovelace card** that
 visually represents a **buffer tank / hot-water cylinder** (a "puffer") used for
@@ -7,7 +7,7 @@ heights and colors the tank according to the real thermal stratification.
 
 <img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/standard.png" alt="Puffer Card – standard layout" width="420">
 
-## ✨ Features
+## Features
 
 - Shows **1 to 3 temperatures**; with fewer than three values they are spread
   evenly over the tank height.
@@ -21,7 +21,7 @@ heights and colors the tank according to the real thermal stratification.
 - **Multilingual** UI (English / Italian) following Home Assistant's language.
 - Adapts to Home Assistant **themes**.
 
-## 📦 Installation
+## Installation
 
 ### HACS (recommended)
 
@@ -50,7 +50,7 @@ heights and colors the tank according to the real thermal stratification.
 > relative to its own URL. The Lit framework is loaded from a CDN on first run
 > and then cached by the browser.
 
-## ⚙️ Configuration
+##  Configuration
 
 Add a card to your dashboard, search for **Puffer Card**, and use the visual
 editor — or configure it in YAML:
@@ -92,13 +92,13 @@ distributed evenly over the tank.
 | `*.label` | string | localized | Label shown next to the value |
 | `unit` | string | from entity / `°C` | Force the unit of measurement |
 
-## 🎨 Layouts
+## Layouts
 
 ### Normal
 
 The full tank with value badges on the side.
 
-<img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/standard.png" alt="Normal layout" width="420">
+<iMITmg src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/standard.png" alt="Normal layout" width="420">
 
 ### Compact
 
@@ -120,12 +120,12 @@ height instead of staying at the extremes.
 
 <img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/two-sensors.png" alt="Two values evenly distributed" width="420">
 
-## 🌡️ Color scale
+## Color scale
 
 Each temperature is mapped to a color between `min_temp` (blue) and `max_temp`
 (red), passing through cyan, amber and orange. Tune `min_temp` / `max_temp` to
 match your system so the colors are meaningful for your typical operating range.
 
-## 📄 License
+## License
 
-[MIT](LICENSE)
+MIT — see [LICENSE](LICENSE)
