@@ -1,5 +1,10 @@
 # Puffer Card
 
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/release/naked-head/puffer-card.svg)](https://github.com/naked-head/puffer-card/releases)
+[![Validate](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml/badge.svg)](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml)
+[![License](https://img.shields.io/github/license/naked-head/puffer-card.svg)](LICENSE)
+
 A custom [Home Assistant](https://www.home-assistant.io/) **Lovelace card** that
 visually represents a **buffer tank / hot-water cylinder** (a "puffer") used for
 heating and domestic hot water. It shows up to three temperatures at different
@@ -22,6 +27,8 @@ heights and colors the tank according to the real thermal stratification.
 - Adapts to Home Assistant **themes**.
 
 ## Installation
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=naked-head&repository=puffer-card&category=plugin)
 
 ### HACS (recommended)
 
