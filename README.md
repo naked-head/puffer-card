@@ -136,3 +136,7 @@ match your system so the colors are meaningful for your typical operating range.
 ## License
 
 MIT — see [LICENSE](LICENSE)
+
+## Acknowledgements
+
+Built with the assistance of [Claude](https://claude.ai) by Anthropic.
