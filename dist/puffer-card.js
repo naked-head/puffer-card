@@ -718,11 +718,15 @@ class PufferCardEditor extends LitElement {
   }
 
   _computeLabel = (schema) => {
-    const keys = [
-      "name", "layout", "show_labels", "min_temp", "max_temp", "entity", "label",
+    // Keys that map directly to a translation entry.
+    const FIELD_KEYS = new Set([
+      "name", "layout", "show_labels",
+      "min_temp", "max_temp", "entity", "label",
       "show_chart", "chart_position", "chart_hours", "chart_style", "chart_sensors",
-    ];
-    return keys.includes(schema.name) ? localize(this.hass, schema.name) : schema.name;
+    ]);
+    if (FIELD_KEYS.has(schema.name)) return localize(this.hass, schema.name);
+    // Expandable section titles are provided directly in the schema; fall through.
+    return schema.title ?? schema.name;
   };
 
   _valueChanged(ev) {
