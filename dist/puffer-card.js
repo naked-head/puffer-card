@@ -2,6 +2,7 @@
  * Puffer Card
  * Custom Lovelace card that visually represents a buffer tank / hot-water
  * cylinder with 1 to 3 temperatures placed at different heights.
+ * Optionally displays a history chart below (or above) the tank.
  *
  * Repo: https://github.com/naked-head/puffer-card
  * License: MIT
@@ -14,15 +15,14 @@ import {
   svg,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 
 /* -------------------------------------------------------------------------- */
 /*  Localization                                                              */
-/*  Translations live in external files: ./translations/<lang>.json           */
 /* -------------------------------------------------------------------------- */
 
-const _i18n = {}; // lang -> dict | null
-const _i18nPromise = {}; // lang -> Promise (de-duplicates concurrent loads)
+const _i18n = {};
+const _i18nPromise = {};
 
 function i18nUrl(lang) {
   return new URL(`./translations/${lang}.json`, import.meta.url);
@@ -33,26 +33,16 @@ function loadLanguage(lang) {
   _i18nPromise[lang] = fetch(i18nUrl(lang))
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null)
-    .then((data) => {
-      _i18n[lang] = data;
-      return data;
-    });
+    .then((data) => { _i18n[lang] = data; return data; });
   return _i18nPromise[lang];
 }
 
-/** Candidate languages, from most specific to the English fallback. */
 function langCandidates(hass) {
   const raw = (hass && (hass.locale?.language || hass.language)) || "en";
   const base = raw.split("-")[0];
   return [...new Set([raw, base, "en"])];
 }
 
-/**
- * Built-in English fallback. Used only when the external language file has not
- * loaded yet (or could not be fetched), so the UI never shows raw keys.
- * The external files in ./translations/ remain the source of truth and the
- * place to add or edit languages.
- */
 const FALLBACK_EN = {
   name: "Card title",
   min_temp: "Min temperature (cold color)",
@@ -70,9 +60,17 @@ const FALLBACK_EN = {
   label_top: "Flow",
   label_middle: "Storage",
   label_bottom: "Return",
+  show_chart: "Show history chart",
+  chart_position: "Chart position",
+  chart_above: "Above",
+  chart_below: "Below",
+  chart_hours: "History period",
+  chart_style: "Chart style",
+  chart_style_area: "Area",
+  chart_style_line: "Lines only",
+  chart_sensors: "Sensors to show in chart",
 };
 
-/** Translate a key for the active language, with graceful fallback. */
 function localize(hass, key) {
   for (const l of langCandidates(hass)) {
     const dict = _i18n[l];
@@ -85,12 +83,14 @@ function localize(hass, key) {
 /*  Utilities                                                                 */
 /* -------------------------------------------------------------------------- */
 
-// Logical slots, ordered from top to bottom.
 const POSITIONS = [
-  { key: "top", labelKey: "label_top" },
+  { key: "top",    labelKey: "label_top"    },
   { key: "middle", labelKey: "label_middle" },
   { key: "bottom", labelKey: "label_bottom" },
 ];
+
+/** Fixed series colors for the chart (independent of temperature ramp). */
+const CHART_COLORS = ["#e53935", "#fb8c00", "#1565c0"];
 
 /** Evenly distributed vertical offsets (0 = top, 1 = bottom) for n values. */
 function evenOffsets(n) {
@@ -105,42 +105,134 @@ const fireEvent = (node, type, detail = {}) => {
   node.dispatchEvent(event);
 };
 
-/** Linear interpolation between two hex colors. */
 function lerpColor(a, b, t) {
-  const ah = parseInt(a.slice(1), 16);
-  const bh = parseInt(b.slice(1), 16);
-  const ar = ah >> 16,
-    ag = (ah >> 8) & 255,
-    ab = ah & 255;
-  const br = bh >> 16,
-    bg = (bh >> 8) & 255,
-    bb = bh & 255;
-  const r = Math.round(ar + (br - ar) * t);
-  const g = Math.round(ag + (bg - ag) * t);
-  const bl = Math.round(ab + (bb - ab) * t);
-  return `rgb(${r},${g},${bl})`;
+  const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
+  const ar = ah >> 16, ag = (ah >> 8) & 255, ab = ah & 255;
+  const br = bh >> 16, bg = (bh >> 8) & 255, bb = bh & 255;
+  return `rgb(${Math.round(ar+(br-ar)*t)},${Math.round(ag+(bg-ag)*t)},${Math.round(ab+(bb-ab)*t)})`;
 }
 
-/** Cold -> hot color ramp: blue, cyan, amber, orange, red. */
 const TEMP_RAMP = [
-  [0.0, "#1565c0"],
-  [0.3, "#29b6f6"],
-  [0.55, "#ffca28"],
-  [0.78, "#fb8c00"],
-  [1.0, "#e53935"],
+  [0.0, "#1565c0"], [0.3, "#29b6f6"], [0.55, "#ffca28"],
+  [0.78, "#fb8c00"], [1.0, "#e53935"],
 ];
 
-/** Map a temperature to a ramp color, clamped between min and max. */
 function tempColor(t, min, max) {
   if (t === null || isNaN(t)) return "#9e9e9e";
-  let f = (t - min) / (max - min);
-  f = Math.max(0, Math.min(1, f));
+  let f = Math.max(0, Math.min(1, (t - min) / (max - min)));
   for (let i = 1; i < TEMP_RAMP.length; i++) {
-    const [p0, c0] = TEMP_RAMP[i - 1];
-    const [p1, c1] = TEMP_RAMP[i];
+    const [p0, c0] = TEMP_RAMP[i - 1], [p1, c1] = TEMP_RAMP[i];
     if (f <= p1) return lerpColor(c0, c1, (f - p0) / (p1 - p0));
   }
   return TEMP_RAMP[TEMP_RAMP.length - 1][1];
+}
+
+/* -------------------------------------------------------------------------- */
+/*  History API                                                               */
+/* -------------------------------------------------------------------------- */
+
+const HOUR_OPTIONS = [2, 6, 12, 24, 48];
+
+/**
+ * Fetch history for one entity via the HA REST history API.
+ * Returns an array of { t: Date, v: number } sorted ascending.
+ */
+async function fetchHistory(hass, entityId, hours) {
+  const end   = new Date();
+  const start = new Date(end.getTime() - hours * 3600 * 1000);
+  const url   = `/api/history/period/${start.toISOString()}` +
+                `?filter_entity_id=${entityId}&end_time=${end.toISOString()}&minimal_response=true`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${hass.auth.data.access_token}` },
+  });
+  if (!res.ok) return [];
+  const json = await res.json();
+  // history API returns [[...states]] — one array per entity
+  const states = json[0] || [];
+  return states
+    .filter((s) => s.state !== "unavailable" && s.state !== "unknown")
+    .map((s) => ({ t: new Date(s.last_changed || s.lu * 1000), v: Number(s.state) }))
+    .filter((s) => !isNaN(s.v));
+}
+
+/* -------------------------------------------------------------------------- */
+/*  SVG chart renderer                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Build an SVG path (and optional area fill) from a series of {t,v} points
+ * mapped into a [x0,y0,w,h] box, given the global time and value extents.
+ */
+function buildPath(series, tMin, tMax, vMin, vMax, x0, y0, w, h) {
+  if (series.length < 2) return { line: "", area: "" };
+  const px = (t) => x0 + ((t - tMin) / (tMax - tMin)) * w;
+  const py = (v) => y0 + h - ((v - vMin) / (vMax - vMin)) * h;
+  const pts = series.map((s) => `${px(s.t).toFixed(1)},${py(s.v).toFixed(1)}`);
+  const line = `M${pts.join("L")}`;
+  const area = `${line}L${px(series[series.length - 1].t).toFixed(1)},${(y0 + h).toFixed(1)}` +
+               `L${x0.toFixed(1)},${(y0 + h).toFixed(1)}Z`;
+  return { line, area };
+}
+
+/**
+ * Render an SVG history chart for multiple series.
+ * compact=true → shorter height, no Y axis labels, no legend (legend is the
+ * tank badges themselves in compact mode).
+ */
+function renderChart(seriesList, labels, colors, style, compact) {
+  const W = 380, H = compact ? 70 : 120;
+  const PAD = { top: 8, right: 8, bottom: compact ? 6 : 20, left: compact ? 6 : 36 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top - PAD.bottom;
+  const x0 = PAD.left, y0 = PAD.top;
+
+  // Global time extents
+  const allPts = seriesList.flat();
+  if (allPts.length === 0) return svg`<svg viewBox="0 0 ${W} ${H}" width="100%"></svg>`;
+  const tMin = Math.min(...allPts.map((p) => p.t));
+  const tMax = Math.max(...allPts.map((p) => p.t));
+
+  // Global value extents with a small padding
+  const allV = allPts.map((p) => p.v);
+  let vMin = Math.min(...allV), vMax = Math.max(...allV);
+  const vPad = (vMax - vMin) * 0.1 || 2;
+  vMin -= vPad; vMax += vPad;
+
+  // Y-axis labels (4 ticks, only in non-compact mode)
+  const yTicks = !compact
+    ? [0, 0.33, 0.66, 1].map((f) => {
+        const v = vMin + f * (vMax - vMin);
+        const cy = y0 + cH - f * cH;
+        return svg`
+          <line x1="${x0}" y1="${cy.toFixed(1)}" x2="${(x0 + cW).toFixed(1)}" y2="${cy.toFixed(1)}"
+                stroke="var(--divider-color,#e0e0e0)" stroke-width="1"></line>
+          <text x="${(x0 - 4).toFixed(1)}" y="${(cy + 4).toFixed(1)}"
+                text-anchor="end" class="chart-tick">${Math.round(v)}</text>`;
+      })
+    : [];
+
+  // Series paths
+  const paths = seriesList.map((series, i) => {
+    if (series.length < 2) return "";
+    const { line, area } = buildPath(
+      series.map((s) => ({ t: s.t.getTime(), v: s.v })),
+      tMin, tMax, vMin, vMax, x0, y0, cW, cH
+    );
+    const col = colors[i];
+    return svg`
+      ${style === "area"
+        ? svg`<path d="${area}" fill="${col}" fill-opacity="0.12" stroke="none"></path>`
+        : ""}
+      <path d="${line}" fill="none" stroke="${col}" stroke-width="2"
+            stroke-linejoin="round" stroke-linecap="round"></path>`;
+  });
+
+  return svg`
+    <svg viewBox="0 0 ${W} ${H}" width="100%" class="chart-svg">
+      <rect width="${W}" height="${H}" fill="transparent"></rect>
+      ${yTicks}
+      ${paths}
+    </svg>`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -150,8 +242,10 @@ function tempColor(t, min, max) {
 class PufferCard extends LitElement {
   static get properties() {
     return {
-      hass: { attribute: false },
-      _config: { state: true },
+      hass:        { attribute: false },
+      _config:     { state: true },
+      _history:    { state: true }, // Map<entityId, [{t,v}]>
+      _histLoading:{ state: true },
     };
   }
 
@@ -160,13 +254,11 @@ class PufferCard extends LitElement {
   }
 
   static async getStubConfig(hass) {
-    // Make sure the active language is available so defaults are localized.
     await Promise.all(langCandidates(hass).map(loadLanguage));
     const temps = hass
       ? Object.keys(hass.states).filter(
-          (e) =>
-            e.startsWith("sensor.") &&
-            hass.states[e].attributes.device_class === "temperature"
+          (e) => e.startsWith("sensor.") &&
+                 hass.states[e].attributes.device_class === "temperature"
         )
       : [];
     return {
@@ -176,7 +268,7 @@ class PufferCard extends LitElement {
       show_labels: true,
       min_temp: 20,
       max_temp: 80,
-      top: { entity: temps[0] || "", label: localize(hass, "label_top") },
+      top:    { entity: temps[0] || "", label: localize(hass, "label_top")    },
       middle: { entity: temps[1] || "", label: localize(hass, "label_middle") },
       bottom: { entity: temps[2] || "", label: localize(hass, "label_bottom") },
     };
@@ -184,11 +276,31 @@ class PufferCard extends LitElement {
 
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
-    this._config = { min_temp: 20, max_temp: 80, layout: "normal", show_labels: true, ...config };
+    const prev = this._config;
+    this._config = {
+      min_temp: 20, max_temp: 80, layout: "normal", show_labels: true,
+      show_chart: false, chart_hours: 24, chart_position: "below",
+      chart_style: "area", chart_sensors: ["top", "middle", "bottom"],
+      ...config,
+    };
+    // Reload history when chart-relevant options change
+    if (this._config.show_chart && (
+      !prev ||
+      prev.show_chart     !== this._config.show_chart     ||
+      prev.chart_hours    !== this._config.chart_hours    ||
+      prev.top?.entity    !== this._config.top?.entity    ||
+      prev.middle?.entity !== this._config.middle?.entity ||
+      prev.bottom?.entity !== this._config.bottom?.entity
+    )) {
+      this._history = new Map();
+      this._fetchHistory();
+    }
   }
 
   getCardSize() {
-    return this._config && this._config.layout === "compact" ? 2 : 5;
+    let size = this._config?.layout === "compact" ? 2 : 5;
+    if (this._config?.show_chart) size += 2;
+    return size;
   }
 
   /* ---- i18n ------------------------------------------------------------- */
@@ -202,6 +314,35 @@ class PufferCard extends LitElement {
     });
   }
 
+  /* ---- history ---------------------------------------------------------- */
+
+  async _fetchHistory() {
+    if (!this.hass || !this._config?.show_chart) return;
+    this._histLoading = true;
+    const hours = Number(this._config.chart_hours) || 24;
+    const data = this._data();
+    const wanted = (this._config.chart_sensors || ["top", "middle", "bottom"]);
+    const toFetch = data.filter((p) => wanted.includes(p.key) && p.cfg?.entity);
+    const results = await Promise.all(
+      toFetch.map((p) => fetchHistory(this.hass, p.cfg.entity, hours))
+    );
+    const map = new Map();
+    toFetch.forEach((p, i) => map.set(p.key, results[i]));
+    this._history = map;
+    this._histLoading = false;
+  }
+
+  /** Refresh history when hass updates (throttled: at most once per 60 s). */
+  updated(changed) {
+    if (changed.has("hass") && this._config?.show_chart) {
+      const now = Date.now();
+      if (!this._lastFetch || now - this._lastFetch > 60_000) {
+        this._lastFetch = now;
+        this._fetchHistory();
+      }
+    }
+  }
+
   /* ---- data ------------------------------------------------------------- */
 
   _stateOf(cfg) {
@@ -209,29 +350,16 @@ class PufferCard extends LitElement {
     return this.hass.states[cfg.entity] || null;
   }
 
-  /** Configured positions, with evenly distributed offsets and resolved labels. */
   _data() {
     const present = POSITIONS.map((p) => {
       const cfg = this._config[p.key];
       if (!cfg || !cfg.entity) return null;
-      const st = this._stateOf(cfg);
-      const raw = st ? Number(st.state) : NaN;
-      const available =
-        st && st.state !== "unavailable" && st.state !== "unknown";
-      const unit =
-        (st && st.attributes && st.attributes.unit_of_measurement) ||
-        this._config.unit ||
-        "°C";
-      const label =
-        (cfg.label && cfg.label.toString()) || localize(this.hass, p.labelKey);
-      return {
-        ...p,
-        cfg,
-        unit,
-        label,
-        available,
-        temp: available && !isNaN(raw) ? raw : null,
-      };
+      const st        = this._stateOf(cfg);
+      const raw       = st ? Number(st.state) : NaN;
+      const available = st && st.state !== "unavailable" && st.state !== "unknown";
+      const unit      = (st?.attributes?.unit_of_measurement) || this._config.unit || "°C";
+      const label     = (cfg.label && cfg.label.toString()) || localize(this.hass, p.labelKey);
+      return { ...p, cfg, unit, label, available, temp: available && !isNaN(raw) ? raw : null };
     }).filter(Boolean);
 
     const offs = evenOffsets(present.length);
@@ -248,18 +376,13 @@ class PufferCard extends LitElement {
     fireEvent(this, "hass-more-info", { entityId });
   }
 
-  /** Build gradient stops + bottom color from the configured temperatures. */
   _gradient(data, min, max) {
     let stops = data
       .filter((p) => p.temp !== null)
       .map((p) => ({ off: p.off, color: tempColor(p.temp, min, max) }))
       .sort((a, b) => a.off - b.off);
-
     if (stops.length === 0) {
-      stops = [
-        { off: 0, color: "#1565c0" },
-        { off: 1, color: "#e53935" },
-      ];
+      stops = [{ off: 0, color: "#1565c0" }, { off: 1, color: "#e53935" }];
     } else {
       if (stops[0].off > 0) stops = [{ off: 0, color: stops[0].color }, ...stops];
       const last = stops[stops.length - 1];
@@ -268,16 +391,50 @@ class PufferCard extends LitElement {
     return { stops, bottomColor: stops[stops.length - 1].color };
   }
 
+  /* ---- chart ------------------------------------------------------------ */
+
+  /**
+   * Whether to use fixed chart colors for the dots instead of temp-ramp colors.
+   * Activates only when the chart is shown and more than one series is displayed.
+   */
+  _useChartColors(data) {
+    if (!this._config.show_chart) return false;
+    const wanted  = this._config.chart_sensors || ["top", "middle", "bottom"];
+    const visible = data.filter((p) => wanted.includes(p.key));
+    return visible.length > 1;
+  }
+
+  _dotColor(p, data, min, max) {
+    if (this._useChartColors(data)) {
+      const wanted = this._config.chart_sensors || ["top", "middle", "bottom"];
+      const idx    = data.filter((d) => wanted.includes(d.key)).findIndex((d) => d.key === p.key);
+      return idx >= 0 ? CHART_COLORS[idx % CHART_COLORS.length] : tempColor(p.temp, min, max);
+    }
+    return tempColor(p.temp, min, max);
+  }
+
+  _renderChart(data, compact = false) {
+    const wanted   = this._config.chart_sensors || ["top", "middle", "bottom"];
+    const series   = data.filter((p) => wanted.includes(p.key));
+    const colors   = series.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
+    const labels   = series.map((p) => p.label);
+    const history  = series.map((p) => (this._history?.get(p.key) || []));
+    const style    = this._config.chart_style || "area";
+    return html`
+      <div class="chart-wrap ${compact ? "chart-compact" : ""}">
+        ${this._histLoading
+          ? html`<div class="chart-loading">…</div>`
+          : renderChart(history, labels, colors, style, compact)}
+      </div>`;
+  }
+
   /* ---- render: shared defs --------------------------------------------- */
 
   _defs(stops, gradId) {
     return svg`
       <defs>
         <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
-          ${stops.map(
-            (s) =>
-              svg`<stop offset="${s.off * 100}%" stop-color="${s.color}"></stop>`
-          )}
+          ${stops.map((s) => svg`<stop offset="${s.off * 100}%" stop-color="${s.color}"></stop>`)}
         </linearGradient>
         <linearGradient id="lidGrad" x1="0" y1="0" x2="1" y2="0">
           <stop offset="0%" stop-color="#cfd8dc"></stop>
@@ -299,14 +456,12 @@ class PufferCard extends LitElement {
   /* ---- render: normal layout ------------------------------------------- */
 
   _y(off) {
-    // Liquid area spans y 48 -> 252 (height 204).
-    return 48 + off * 204;
+    return 48 + off * 204; // liquid area y 48 -> 252
   }
 
-  _badge(p, min, max, showLabels) {
-    const y = this._y(p.off);
-    const color = tempColor(p.temp, min, max);
-    const val = p.temp === null ? "—" : this._format(p.temp);
+  _badge(p, min, max, showLabels, dotColor) {
+    const y    = this._y(p.off);
+    const val  = p.temp === null ? "—" : this._format(p.temp);
     const valY = showLabels ? y + 16 : y + 8;
     return svg`
       <g class="badge" @click=${() => this._moreInfo(p.cfg.entity)}>
@@ -315,26 +470,29 @@ class PufferCard extends LitElement {
               stroke-dasharray="4 4"></line>
         <line x1="180" y1="${y}" x2="212" y2="${y}"
               stroke="var(--divider-color, #cfd8dc)" stroke-width="2"></line>
-        <circle cx="180" cy="${y}" r="4.5" fill="${color}"></circle>
+        <circle cx="180" cy="${y}" r="4.5" fill="${dotColor}"></circle>
         <rect x="212" y="${y - 25}" width="156" height="50" rx="13"
               fill="var(--card-background-color, #fff)"
               stroke="var(--divider-color, #cfd8dc)" stroke-width="1"></rect>
-        <circle cx="226" cy="${showLabels ? y - 9 : y}" r="4" fill="${color}"></circle>
+        <circle cx="226" cy="${showLabels ? y - 9 : y}" r="4" fill="${dotColor}"></circle>
         ${showLabels
           ? svg`<text x="237" y="${y - 5}" class="lbl">${p.label}</text>`
           : ""}
-        <text x="${showLabels ? 226 : 240}" y="${valY}" class="val" fill="${color}">${val}<tspan class="unit" dx="3">${p.unit}</tspan></text>
+        <text x="${showLabels ? 226 : 240}" y="${valY}" class="val"
+              fill="${tempColor(p.temp, min, max)}">${val}<tspan class="unit" dx="3">${p.unit}</tspan></text>
       </g>`;
   }
 
   _renderNormal(data, min, max, showLabels) {
     const { stops, bottomColor } = this._gradient(data, min, max);
-    return html`
+    const useChart   = this._config.show_chart;
+    const chartAbove = this._config.chart_position === "above";
+    const tank = html`
       <svg viewBox="0 0 380 300" width="100%" preserveAspectRatio="xMidYMid meet">
         ${this._defs(stops, "liquidGrad")}
-        <rect x="101" y="18" width="18" height="34" rx="3" fill="#9fb0b8"></rect>
+        <rect x="101" y="18"  width="18" height="34" rx="3" fill="#9fb0b8"></rect>
         <rect x="101" y="250" width="18" height="28" rx="3" fill="#9fb0b8"></rect>
-        <rect x="176" y="92" width="34" height="11" rx="3" fill="#9fb0b8"></rect>
+        <rect x="176" y="92"  width="34" height="11" rx="3" fill="#9fb0b8"></rect>
         <rect x="176" y="200" width="34" height="11" rx="3" fill="#9fb0b8"></rect>
         <g filter="url(#ds)">
           <ellipse cx="110" cy="252" rx="70" ry="15" fill="${bottomColor}"></ellipse>
@@ -342,23 +500,26 @@ class PufferCard extends LitElement {
           <rect x="40" y="48" width="140" height="204" fill="url(#sheen)"></rect>
           <path d="M40,252 A70,15 0 0 0 180,252"
                 fill="none" stroke="rgba(0,0,0,0.25)" stroke-width="2"></path>
-          <line x1="40" y1="48" x2="40" y2="252" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
+          <line x1="40"  y1="48" x2="40"  y2="252" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
           <line x1="180" y1="48" x2="180" y2="252" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
           <line x1="42" y1="120" x2="178" y2="120" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
           <line x1="42" y1="184" x2="178" y2="184" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
           <ellipse cx="110" cy="48" rx="70" ry="15" fill="url(#lidGrad)"
                    stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></ellipse>
         </g>
-        ${data.map((p) => this._badge(p, min, max, showLabels))}
-      </svg>
-    `;
+        ${data.map((p) => this._badge(p, min, max, showLabels, this._dotColor(p, data, min, max)))}
+      </svg>`;
+    return html`
+      ${useChart && chartAbove  ? this._renderChart(data, false) : ""}
+      ${tank}
+      ${useChart && !chartAbove ? this._renderChart(data, false) : ""}`;
   }
 
   /* ---- render: compact layout ------------------------------------------ */
 
   _miniTank(data, min, max) {
     const { stops, bottomColor } = this._gradient(data, min, max);
-    const y = (off) => 14 + off * 96; // liquid area 14 -> 110
+    const y = (off) => 14 + off * 96;
     return svg`
       <svg viewBox="0 0 84 124" width="64" preserveAspectRatio="xMidYMid meet">
         ${this._defs(stops, "liquidGrad")}
@@ -366,43 +527,47 @@ class PufferCard extends LitElement {
           <ellipse cx="42" cy="110" rx="26" ry="7" fill="${bottomColor}"></ellipse>
           <rect x="16" y="14" width="52" height="96" fill="url(#liquidGrad)"></rect>
           <rect x="16" y="14" width="52" height="96" fill="url(#sheen)"></rect>
-          <line x1="16" y1="14" x2="16" y2="110" stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></line>
-          <line x1="68" y1="14" x2="68" y2="110" stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></line>
-          <path d="M16,110 A26,7 0 0 0 68,110" fill="none" stroke="rgba(0,0,0,0.22)" stroke-width="1.5"></path>
+          <line x1="16" y1="14"  x2="16" y2="110" stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></line>
+          <line x1="68" y1="14"  x2="68" y2="110" stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></line>
+          <path d="M16,110 A26,7 0 0 0 68,110"
+                fill="none" stroke="rgba(0,0,0,0.22)" stroke-width="1.5"></path>
           <ellipse cx="42" cy="14" rx="26" ry="7" fill="url(#lidGrad)"
                    stroke="rgba(0,0,0,0.18)" stroke-width="1"></ellipse>
         </g>
-        ${data.map(
-          (p) => svg`<circle cx="68" cy="${y(p.off)}" r="3.5"
-                       fill="${tempColor(p.temp, min, max)}"
-                       stroke="#fff" stroke-width="1"></circle>`
-        )}
-      </svg>
-    `;
+        ${data.map((p) => svg`
+          <circle cx="68" cy="${y(p.off)}" r="3.5"
+                  fill="${this._dotColor(p, data, min, max)}"
+                  stroke="#fff" stroke-width="1"></circle>`)}
+      </svg>`;
   }
 
   _renderCompact(data, min, max, showLabels) {
-    return html`
+    const useChart   = this._config.show_chart;
+    const chartAbove = this._config.chart_position === "above";
+    const body = html`
       <div class="compact">
         <div class="mini">${this._miniTank(data, min, max)}</div>
         <div class="rows">
           ${data.map((p) => {
             const color = tempColor(p.temp, min, max);
-            const val = p.temp === null ? "—" : this._format(p.temp);
+            const dot   = this._dotColor(p, data, min, max);
+            const val   = p.temp === null ? "—" : this._format(p.temp);
             return html`
               <div class="row ${showLabels ? "" : "no-labels"}"
                    @click=${() => this._moreInfo(p.cfg.entity)}>
                 ${showLabels
-                  ? html`<span class="dot" style="background:${color}"></span>
+                  ? html`<span class="dot" style="background:${dot}"></span>
                          <span class="rlabel">${p.label}</span>`
                   : ""}
                 <span class="rval" style="color:${color}">${val}<span class="runit">${p.unit}</span></span>
-              </div>
-            `;
+              </div>`;
           })}
         </div>
-      </div>
-    `;
+      </div>`;
+    return html`
+      ${useChart && chartAbove  ? this._renderChart(data, true) : ""}
+      ${body}
+      ${useChart && !chartAbove ? this._renderChart(data, true) : ""}`;
   }
 
   /* ---- render ----------------------------------------------------------- */
@@ -411,154 +576,77 @@ class PufferCard extends LitElement {
     if (!this._config) return html``;
     this._loadI18n();
 
-    const min = Number(this._config.min_temp);
-    const max =
-      Number(this._config.max_temp) > min ? Number(this._config.max_temp) : min + 1;
-    const data = this._data();
-    const compact = this._config.layout === "compact";
+    const min        = Number(this._config.min_temp);
+    const max        = Number(this._config.max_temp) > min ? Number(this._config.max_temp) : min + 1;
+    const data       = this._data();
+    const compact    = this._config.layout === "compact";
     const showLabels = this._config.show_labels !== false;
 
     return html`
       <ha-card class=${compact ? "is-compact" : ""}>
-        ${this._config.name
-          ? html`<div class="title">${this._config.name}</div>`
-          : ""}
+        ${this._config.name ? html`<div class="title">${this._config.name}</div>` : ""}
         <div class="container">
           ${compact
             ? this._renderCompact(data, min, max, showLabels)
             : this._renderNormal(data, min, max, showLabels)}
         </div>
-      </ha-card>
-    `;
+      </ha-card>`;
   }
 
   static get styles() {
     return css`
-      ha-card {
-        padding: 12px 12px 8px;
-        overflow: hidden;
-      }
-      ha-card.is-compact {
-        padding: 10px 14px;
-      }
-      .title {
-        font-size: 1.15rem;
-        font-weight: 600;
-        color: var(--primary-text-color);
-        padding: 4px 4px 0;
-      }
-      .is-compact .title {
-        font-size: 1rem;
-        padding: 0 0 6px;
-      }
-      .container {
-        width: 100%;
-      }
-      svg {
-        display: block;
-        max-height: 360px;
-      }
-      /* normal layout badges */
-      .badge {
-        cursor: pointer;
-      }
-      .badge:hover rect {
-        stroke: var(--primary-color);
-      }
-      .lbl {
-        fill: var(--secondary-text-color, #727272);
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        font-family: var(--paper-font-body1_-_font-family, sans-serif);
-      }
-      .val {
-        font-size: 21px;
-        font-weight: 700;
-        font-family: var(--paper-font-body1_-_font-family, sans-serif);
-      }
-      .unit {
-        font-size: 11px;
-        font-weight: 600;
-      }
-      /* compact layout */
-      .compact {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-      }
-      .compact .mini {
-        flex: 0 0 auto;
-      }
-      .compact .mini svg {
-        max-height: 124px;
-      }
-      .rows {
-        flex: 1 1 auto;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        min-width: 0;
-      }
-      .row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        cursor: pointer;
-        padding: 4px 6px;
-        border-radius: 8px;
-      }
-      .row:hover {
-        background: var(--secondary-background-color, rgba(0, 0, 0, 0.05));
-      }
-      .dot {
-        flex: 0 0 auto;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-      }
-      .rlabel {
-        flex: 1 1 auto;
-        color: var(--primary-text-color);
-        font-size: 0.95rem;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .rval {
-        flex: 0 0 auto;
-        margin-left: auto;
-        font-weight: 700;
-        font-size: 1.15rem;
-      }
-      .row.no-labels .rval {
-        margin-left: 0;
-      }
-      .runit {
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-left: 2px;
-      }
+      ha-card { padding: 12px 12px 8px; overflow: hidden; }
+      ha-card.is-compact { padding: 10px 14px; }
+      .title { font-size: 1.15rem; font-weight: 600; color: var(--primary-text-color); padding: 4px 4px 0; }
+      .is-compact .title { font-size: 1rem; padding: 0 0 6px; }
+      .container { width: 100%; }
+      svg { display: block; max-height: 360px; }
+      /* normal badges */
+      .badge { cursor: pointer; }
+      .badge:hover rect { stroke: var(--primary-color); }
+      .lbl { fill: var(--secondary-text-color, #727272); font-size: 10px; font-weight: 700;
+             letter-spacing: 0.5px; text-transform: uppercase;
+             font-family: var(--paper-font-body1_-_font-family, sans-serif); }
+      .val  { font-size: 21px; font-weight: 700;
+              font-family: var(--paper-font-body1_-_font-family, sans-serif); }
+      .unit { font-size: 11px; font-weight: 600; }
+      /* compact */
+      .compact { display: flex; align-items: center; gap: 14px; }
+      .compact .mini { flex: 0 0 auto; }
+      .compact .mini svg { max-height: 124px; }
+      .rows { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .row  { display: flex; align-items: center; gap: 8px; cursor: pointer;
+              padding: 4px 6px; border-radius: 8px; }
+      .row:hover { background: var(--secondary-background-color, rgba(0,0,0,0.05)); }
+      .dot  { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; }
+      .rlabel { flex: 1 1 auto; color: var(--primary-text-color); font-size: 0.95rem;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .rval { flex: 0 0 auto; margin-left: auto; font-weight: 700; font-size: 1.15rem; }
+      .row.no-labels .rval { margin-left: 0; }
+      .runit { font-size: 0.75rem; font-weight: 600; margin-left: 2px; }
+      /* chart */
+      .chart-wrap { width: 100%; overflow: hidden; }
+      .chart-wrap.chart-compact { margin: 4px 0; }
+      .chart-wrap:not(.chart-compact) { margin: 8px 0; }
+      .chart-svg { display: block; }
+      .chart-tick { font-size: 9px; fill: var(--secondary-text-color, #727272);
+                    font-family: var(--paper-font-body1_-_font-family, sans-serif); }
+      .chart-loading { height: 70px; display: flex; align-items: center;
+                       justify-content: center; color: var(--secondary-text-color); font-size: 0.85rem; }
     `;
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Editor (graphical configuration UI)                                       */
+/*  Editor                                                                    */
 /* -------------------------------------------------------------------------- */
 
 class PufferCardEditor extends LitElement {
   static get properties() {
-    return {
-      hass: { attribute: false },
-      _config: { state: true },
-    };
+    return { hass: { attribute: false }, _config: { state: true } };
   }
 
-  setConfig(config) {
-    this._config = config;
-  }
+  setConfig(config) { this._config = config; }
 
   _loadI18n() {
     this._reqLangs = this._reqLangs || new Set();
@@ -569,48 +657,72 @@ class PufferCardEditor extends LitElement {
     });
   }
 
-  /** Build the ha-form schema with localized titles and options. */
   _schema() {
     const sub = [
-      {
-        name: "entity",
-        selector: { entity: { domain: ["sensor", "number", "input_number"] } },
-      },
-      { name: "label", selector: { text: {} } },
+      { name: "entity", selector: { entity: { domain: ["sensor", "number", "input_number"] } } },
+      { name: "label",  selector: { text: {} } },
     ];
+
+    // Chart sensors: only show keys that have a configured entity
+    const sensorOptions = POSITIONS
+      .filter((p) => this._config?.[p.key]?.entity)
+      .map((p) => ({
+        value: p.key,
+        label: this._config[p.key]?.label || localize(this.hass, p.labelKey),
+      }));
+
+    const chartSchema = this._config?.show_chart ? [
+      {
+        name: "chart_position",
+        selector: { select: { mode: "dropdown", options: [
+          { value: "below", label: localize(this.hass, "chart_below") },
+          { value: "above", label: localize(this.hass, "chart_above") },
+        ]}},
+      },
+      {
+        name: "chart_hours",
+        selector: { select: { mode: "dropdown", options:
+          HOUR_OPTIONS.map((h) => ({ value: h, label: `${h}h` })),
+        }},
+      },
+      {
+        name: "chart_style",
+        selector: { select: { mode: "dropdown", options: [
+          { value: "area", label: localize(this.hass, "chart_style_area") },
+          { value: "line", label: localize(this.hass, "chart_style_line") },
+        ]}},
+      },
+      ...(sensorOptions.length > 1 ? [{
+        name: "chart_sensors",
+        selector: { select: { mode: "list", multiple: true, options: sensorOptions } },
+      }] : []),
+    ] : [];
+
     return [
       { name: "name", selector: { text: {} } },
-      {
-        name: "layout",
-        selector: {
-          select: {
-            mode: "dropdown",
-            options: [
-              { value: "normal", label: localize(this.hass, "layout_normal") },
-              { value: "compact", label: localize(this.hass, "layout_compact") },
-            ],
-          },
-        },
-      },
+      { name: "layout", selector: { select: { mode: "dropdown", options: [
+        { value: "normal",  label: localize(this.hass, "layout_normal")  },
+        { value: "compact", label: localize(this.hass, "layout_compact") },
+      ]}}},
       { name: "show_labels", selector: { boolean: {} } },
-      {
-        type: "grid",
-        schema: [
-          { name: "min_temp", selector: { number: { mode: "box", step: 1, unit_of_measurement: "°C" } } },
-          { name: "max_temp", selector: { number: { mode: "box", step: 1, unit_of_measurement: "°C" } } },
-        ],
-      },
-      { name: "top", type: "expandable", title: localize(this.hass, "pos_top"), expanded: true, schema: sub },
+      { type: "grid", schema: [
+        { name: "min_temp", selector: { number: { mode: "box", step: 1, unit_of_measurement: "°C" } } },
+        { name: "max_temp", selector: { number: { mode: "box", step: 1, unit_of_measurement: "°C" } } },
+      ]},
+      { name: "top",    type: "expandable", title: localize(this.hass, "pos_top"),    expanded: true, schema: sub },
       { name: "middle", type: "expandable", title: localize(this.hass, "pos_middle"), schema: sub },
       { name: "bottom", type: "expandable", title: localize(this.hass, "pos_bottom"), schema: sub },
+      { name: "show_chart", selector: { boolean: {} } },
+      ...chartSchema,
     ];
   }
 
   _computeLabel = (schema) => {
-    const keys = ["name", "layout", "show_labels", "min_temp", "max_temp", "entity", "label"];
-    return keys.includes(schema.name)
-      ? localize(this.hass, schema.name)
-      : schema.name;
+    const keys = [
+      "name", "layout", "show_labels", "min_temp", "max_temp", "entity", "label",
+      "show_chart", "chart_position", "chart_hours", "chart_style", "chart_sensors",
+    ];
+    return keys.includes(schema.name) ? localize(this.hass, schema.name) : schema.name;
   };
 
   _valueChanged(ev) {
@@ -624,14 +736,9 @@ class PufferCardEditor extends LitElement {
     if (!this._config || !this.hass) return html``;
     this._loadI18n();
     return html`
-      <ha-form
-        .hass=${this.hass}
-        .data=${this._config}
-        .schema=${this._schema()}
-        .computeLabel=${this._computeLabel}
-        @value-changed=${this._valueChanged}
-      ></ha-form>
-    `;
+      <ha-form .hass=${this.hass} .data=${this._config} .schema=${this._schema()}
+               .computeLabel=${this._computeLabel}
+               @value-changed=${this._valueChanged}></ha-form>`;
   }
 }
 
@@ -642,15 +749,13 @@ class PufferCardEditor extends LitElement {
 customElements.define("puffer-card", PufferCard);
 customElements.define("puffer-card-editor", PufferCardEditor);
 
-// Preload English so labels are available for the card picker / first paint.
 loadLanguage("en");
 
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: "puffer-card",
   name: "Puffer Card",
-  description:
-    "Represents a buffer tank / boiler with 1-3 temperatures at different heights.",
+  description: "Represents a buffer tank / boiler with 1-3 temperatures at different heights.",
   preview: true,
   documentationURL: "https://github.com/naked-head/puffer-card",
 });

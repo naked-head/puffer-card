@@ -21,6 +21,8 @@ heights and colors the tank according to the real thermal stratification.
 - **Customizable labels**, with sensible localized defaults.
 - **Two layouts**: `normal` (full tank) and `compact` (mini tank + value list).
 - **Option to hide labels** and show values only.
+- **Optional history chart** below or above the tank, with selectable period
+  (2 h – 48 h), area or line style, and per-sensor visibility.
 - Click any value to open the entity's **more-info** dialog.
 - Built-in **graphical editor** — no YAML required.
 - **Multilingual** UI (English / Italian) following Home Assistant's language.
@@ -57,7 +59,7 @@ heights and colors the tank according to the real thermal stratification.
 > relative to its own URL. The Lit framework is loaded from a CDN on first run
 > and then cached by the browser.
 
-##  Configuration
+## Configuration
 
 Add a card to your dashboard, search for **Puffer Card**, and use the visual
 editor — or configure it in YAML:
@@ -78,6 +80,14 @@ middle:
 bottom:
   entity: sensor.buffer_bottom
   label: Return
+show_chart: true        # optional history chart
+chart_position: below   # "below" or "above"
+chart_hours: 24         # 2, 6, 12, 24 or 48
+chart_style: area       # "area" or "line"
+chart_sensors:          # which positions to include in the chart
+  - top
+  - middle
+  - bottom
 ```
 
 To show **fewer than three values**, simply omit the positions you don't need
@@ -98,6 +108,11 @@ distributed evenly over the tank.
 | `*.entity` | string | – | Temperature entity (`sensor`, `number` or `input_number`) |
 | `*.label` | string | localized | Label shown next to the value |
 | `unit` | string | from entity / `°C` | Force the unit of measurement |
+| `show_chart` | boolean | `false` | Show the history chart |
+| `chart_position` | string | `below` | `below` or `above` the tank |
+| `chart_hours` | number | `24` | History period: `2`, `6`, `12`, `24` or `48` |
+| `chart_style` | string | `area` | `area` (filled) or `line` |
+| `chart_sensors` | list | all | Positions to include: `top`, `middle`, `bottom` |
 
 ## Layouts
 
@@ -105,7 +120,7 @@ distributed evenly over the tank.
 
 The full tank with value badges on the side.
 
-<iMITmg src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/standard.png" alt="Normal layout" width="420">
+<img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/standard.png" alt="Normal layout" width="420">
 
 ### Compact
 
@@ -126,6 +141,20 @@ When you configure one or two values, they are evenly distributed over the tank
 height instead of staying at the extremes.
 
 <img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/two-sensors.png" alt="Two values evenly distributed" width="420">
+
+## History chart
+
+When `show_chart: true` a history chart is rendered below (or above) the tank,
+fetching data from the HA History API. Each sensor is drawn in a fixed color
+(red, orange, blue) that doubles as the legend.
+
+<img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/chart-normal.png" alt="Normal layout with history chart" width="420">
+
+When the chart is active and more than one sensor is shown, the colored dots on
+the tank and in the compact list switch to the same fixed colors, linking the
+live reading to the corresponding chart line.
+
+<img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/chart-compact.png" alt="Compact layout with history chart" width="420">
 
 ## Color scale
 

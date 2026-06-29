@@ -14,5 +14,14 @@
   "label_top": "Flow",
   "label_middle": "Storage",
   "label_bottom": "Return",
-  "show_labels": "Show labels"
+  "show_labels": "Show labels",
+  "show_chart": "Show history chart",
+  "chart_position": "Chart position",
+  "chart_above": "Above",
+  "chart_below": "Below",
+  "chart_hours": "History period",
+  "chart_style": "Chart style",
+  "chart_style_area": "Area",
+  "chart_style_line": "Lines only",
+  "chart_sensors": "Sensors to show in chart"
 }

@@ -14,5 +14,14 @@
   "label_top": "Mandata",
   "label_middle": "Accumulo",
   "label_bottom": "Ritorno",
-  "show_labels": "Mostra etichette"
+  "show_labels": "Mostra etichette",
+  "show_chart": "Mostra grafico storico",
+  "chart_position": "Posizione del grafico",
+  "chart_above": "Sopra",
+  "chart_below": "Sotto",
+  "chart_hours": "Periodo storico",
+  "chart_style": "Stile del grafico",
+  "chart_style_area": "Area",
+  "chart_style_line": "Solo linee",
+  "chart_sensors": "Sensori da mostrare nel grafico"
 }

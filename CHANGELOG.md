@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-29
+ 
+### Added
+- Optional history chart rendered below or above the tank (configurable).
+- Selectable history period: 2 h, 6 h, 12 h, 24 h, 48 h.
+- Two chart styles: area (filled) or lines only.
+- Selector to choose which configured sensors appear in the chart.
+- When the chart is active and more than one series is shown, the tank dots
+  switch to fixed series colors (red / orange / blue) to match the chart
+  legend, instead of the temperature-ramp color.
+- History data fetched via HA REST History API; auto-refreshed every 60 s.
+
 ## [1.0.0] - 2026-06-18
 
 First public release.
@@ -25,4 +37,5 @@ First public release.
   shows raw keys.
 - Theme-aware styling.
 
+[1.1.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.0
 [1.0.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.0.0
