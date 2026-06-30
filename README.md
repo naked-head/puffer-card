@@ -21,8 +21,9 @@ heights and colors the tank according to the real thermal stratification.
 - **Customizable labels**, with sensible localized defaults.
 - **Two layouts**: `normal` (full tank) and `compact` (mini tank + value list).
 - **Option to hide labels** and show values only.
+- Optional **icon** next to the title, or replacing it entirely.
 - **Optional history chart** below or above the tank, with selectable period
-  (2 h – 48 h), area or line style, and per-sensor visibility.
+  (2 h – 48 h), smooth area or line style, and per-sensor visibility.
 - Click any value to open the entity's **more-info** dialog.
 - Built-in **graphical editor** — no YAML required.
 - **Multilingual** UI (English / Italian) following Home Assistant's language.
@@ -67,8 +68,10 @@ editor — or configure it in YAML:
 ```yaml
 type: custom:puffer-card
 name: Heating buffer
-layout: normal          # "normal" or "compact"
-show_labels: true       # set to false to show values only
+icon: mdi:propane-tank-outline   # optional
+icon_mode: beside                # "beside" or "replace"
+layout: normal           # "normal" or "compact"
+show_labels: true        # set to false to show values only
 min_temp: 20            # temperature mapped to the cold color
 max_temp: 80            # temperature mapped to the hot color
 top:
@@ -100,6 +103,8 @@ distributed evenly over the tank.
 |---|---|---|---|
 | `type` | string | – | `custom:puffer-card` (required) |
 | `name` | string | localized | Card title; leave empty to hide it |
+| `icon` | string | – | Optional icon (e.g. `mdi:propane-tank-outline`) |
+| `icon_mode` | string | `beside` | `beside` the title or `replace` it |
 | `layout` | string | `normal` | `normal` (full tank) or `compact` (mini tank + list) |
 | `show_labels` | boolean | `true` | Show or hide the labels next to each value |
 | `min_temp` | number | `20` | Temperature mapped to the cold color |
@@ -145,8 +150,9 @@ height instead of staying at the extremes.
 ## History chart
 
 When `show_chart: true` a history chart is rendered below (or above) the tank,
-fetching data from the HA History API. Each sensor is drawn in a fixed color
-(red, orange, blue) that doubles as the legend.
+fetching data from the HA History API. Curves are smoothed (Catmull-Rom
+interpolation), similar to other popular history-graph cards. Each sensor is
+drawn in a fixed color (red, orange, blue) that doubles as the legend.
 
 <img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/chart-normal.png" alt="Normal layout with history chart" width="420">
 

@@ -15,7 +15,7 @@ import {
   svg,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const VERSION = "1.1.2";
+const VERSION = "1.2.0";
 
 /* -------------------------------------------------------------------------- */
 /*  Localization                                                              */
@@ -69,6 +69,10 @@ const FALLBACK_EN = {
   chart_style_area: "Area",
   chart_style_line: "Lines only",
   chart_sensors: "Sensors to show in chart",
+  icon: "Icon",
+  icon_mode: "Icon position",
+  icon_mode_beside: "Beside title",
+  icon_mode_replace: "Replace title",
 };
 
 function localize(hass, key) {
@@ -160,16 +164,38 @@ async function fetchHistory(hass, entityId, hours) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Build an SVG path (and optional area fill) from a series of {t,v} points
- * mapped into a [x0,y0,w,h] box, given the global time and value extents.
+ * Build a smooth SVG path (Catmull-Rom converted to cubic Béziers) and an
+ * optional area fill from a series of {t,v} points mapped into a
+ * [x0,y0,w,h] box, given the global time and value extents.
+ * Falls back to a straight polyline for fewer than 3 points.
  */
 function buildPath(series, tMin, tMax, vMin, vMax, x0, y0, w, h) {
   if (series.length < 2) return { line: "", area: "" };
   const px = (t) => x0 + ((t - tMin) / (tMax - tMin)) * w;
   const py = (v) => y0 + h - ((v - vMin) / (vMax - vMin)) * h;
-  const pts = series.map((s) => `${px(s.t).toFixed(1)},${py(s.v).toFixed(1)}`);
-  const line = `M${pts.join("L")}`;
-  const area = `${line}L${px(series[series.length - 1].t).toFixed(1)},${(y0 + h).toFixed(1)}` +
+  const pts = series.map((s) => [px(s.t), py(s.v)]);
+
+  let line;
+  if (pts.length < 3) {
+    line = `M${pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("L")}`;
+  } else {
+    // Catmull-Rom -> cubic Bézier conversion (uniform, tension 1).
+    line = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      line += `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+    }
+  }
+
+  const lastPt = pts[pts.length - 1];
+  const area = `${line}L${lastPt[0].toFixed(1)},${(y0 + h).toFixed(1)}` +
                `L${x0.toFixed(1)},${(y0 + h).toFixed(1)}Z`;
   return { line, area };
 }
@@ -264,6 +290,8 @@ class PufferCard extends LitElement {
     return {
       type: "custom:puffer-card",
       name: localize(hass, "default_title"),
+      icon: "mdi:propane-tank-outline",
+      icon_mode: "beside",
       layout: "normal",
       show_labels: true,
       min_temp: 20,
@@ -277,12 +305,22 @@ class PufferCard extends LitElement {
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
     const prev = this._config;
-    this._config = {
+    const merged = {
       min_temp: 20, max_temp: 80, layout: "normal", show_labels: true,
+      icon: "", icon_mode: "beside",
       show_chart: false, chart_hours: 24, chart_position: "below",
-      chart_style: "area", chart_sensors: ["top", "middle", "bottom"],
+      chart_style: "area",
       ...config,
     };
+    // Always materialize chart_sensors explicitly (instead of relying on a
+    // runtime fallback) so the multi-select in the editor and the chart
+    // rendering never disagree about which sensors are selected.
+    if (!Array.isArray(merged.chart_sensors) || merged.chart_sensors.length === 0) {
+      merged.chart_sensors = POSITIONS
+        .map((p) => p.key)
+        .filter((k) => merged[k]?.entity);
+    }
+    this._config = merged;
     // Reload history when chart-relevant options change
     if (this._config.show_chart && (
       !prev ||
@@ -290,7 +328,8 @@ class PufferCard extends LitElement {
       prev.chart_hours    !== this._config.chart_hours    ||
       prev.top?.entity    !== this._config.top?.entity    ||
       prev.middle?.entity !== this._config.middle?.entity ||
-      prev.bottom?.entity !== this._config.bottom?.entity
+      prev.bottom?.entity !== this._config.bottom?.entity ||
+      JSON.stringify(prev.chart_sensors) !== JSON.stringify(this._config.chart_sensors)
     )) {
       this._history = new Map();
       this._fetchHistory();
@@ -582,9 +621,18 @@ class PufferCard extends LitElement {
     const compact    = this._config.layout === "compact";
     const showLabels = this._config.show_labels !== false;
 
+    const hasIcon  = !!this._config.icon;
+    const replaceTitle = hasIcon && this._config.icon_mode === "replace";
+
     return html`
       <ha-card class=${compact ? "is-compact" : ""}>
-        ${this._config.name ? html`<div class="title">${this._config.name}</div>` : ""}
+        ${this._config.name || hasIcon
+          ? html`
+              <div class="title">
+                ${hasIcon ? html`<ha-icon class="title-icon" icon=${this._config.icon}></ha-icon>` : ""}
+                ${replaceTitle ? "" : this._config.name}
+              </div>`
+          : ""}
         <div class="container">
           ${compact
             ? this._renderCompact(data, min, max, showLabels)
@@ -597,8 +645,10 @@ class PufferCard extends LitElement {
     return css`
       ha-card { padding: 12px 12px 8px; overflow: hidden; }
       ha-card.is-compact { padding: 10px 14px; }
-      .title { font-size: 1.15rem; font-weight: 600; color: var(--primary-text-color); padding: 4px 4px 0; }
+      .title { display: flex; align-items: center; gap: 8px; font-size: 1.15rem; font-weight: 600;
+               color: var(--primary-text-color); padding: 4px 4px 0; }
       .is-compact .title { font-size: 1rem; padding: 0 0 6px; }
+      .title-icon { --mdc-icon-size: 22px; color: var(--state-icon-color, var(--primary-text-color)); flex: 0 0 auto; }
       .container { width: 100%; }
       svg { display: block; max-height: 360px; }
       /* normal badges */
@@ -700,6 +750,14 @@ class PufferCardEditor extends LitElement {
 
     return [
       { name: "name", selector: { text: {} } },
+      { name: "icon", selector: { icon: {} } },
+      ...(this._config?.icon ? [{
+        name: "icon_mode",
+        selector: { select: { mode: "dropdown", options: [
+          { value: "beside",  label: localize(this.hass, "icon_mode_beside")  },
+          { value: "replace", label: localize(this.hass, "icon_mode_replace") },
+        ]}},
+      }] : []),
       { name: "layout", selector: { select: { mode: "dropdown", options: [
         { value: "normal",  label: localize(this.hass, "layout_normal")  },
         { value: "compact", label: localize(this.hass, "layout_compact") },
@@ -720,7 +778,7 @@ class PufferCardEditor extends LitElement {
   _computeLabel = (schema) => {
     // Keys that map directly to a translation entry.
     const FIELD_KEYS = new Set([
-      "name", "layout", "show_labels",
+      "name", "icon", "icon_mode", "layout", "show_labels",
       "min_temp", "max_temp", "entity", "label",
       "show_chart", "chart_position", "chart_hours", "chart_style", "chart_sensors",
     ]);

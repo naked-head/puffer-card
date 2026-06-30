@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-30
+
+### Added
+- Optional `icon` next to the card title, or replacing it entirely
+  (`icon_mode: beside` / `replace`), selectable via the visual editor's icon
+  picker. The stub configuration now suggests a default tank icon.
+
+### Changed
+- History chart curves are now smoothed using Catmull-Rom interpolation
+  (converted to cubic Béziers), matching the look of popular history-graph
+  cards instead of straight-segment lines.
+
+### Fixed
+- The chart sensor multi-select could get out of sync with the rendered
+  chart: on first enabling the chart, all configured sensors were drawn but
+  none appeared selected in the editor: selecting one made the others
+  disappear, and deselecting it left an empty chart area. `chart_sensors` is
+  now always explicitly populated with all configured sensors as soon as the
+  chart is enabled, so editor and rendering stay consistent from the start.
+
 ## [1.1.2] - 2026-06-30
  
 ### Fixed
@@ -50,6 +70,7 @@ First public release.
   shows raw keys.
 - Theme-aware styling.
 
+[1.2.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.2.0
 [1.1.2]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.2
 [1.1.1]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.1
 [1.1.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.0

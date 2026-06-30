@@ -23,5 +23,9 @@
   "chart_style": "Stile del grafico",
   "chart_style_area": "Area",
   "chart_style_line": "Solo linee",
-  "chart_sensors": "Sensori da mostrare nel grafico"
+  "chart_sensors": "Sensori da mostrare nel grafico",
+  "icon": "Icona",
+  "icon_mode": "Posizione icona",
+  "icon_mode_beside": "Accanto al titolo",
+  "icon_mode_replace": "Sostituisce il titolo"
 }
