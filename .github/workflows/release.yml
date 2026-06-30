@@ -15,6 +15,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # No asset is attached on purpose: for a multi-file plugin HACS downloads
+      # the whole dist/ folder (card + translations) from the tagged source.
+      # Make sure the VERSION constant in dist/puffer-card.js matches the tag
+      # before creating the tag.
+
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Grab everything between "## [VERSION]" and the next "## [" heading,
+          # or the block of [x.y.z]: link references at the end of the file
+          # (whichever comes first), then drop the heading line itself.
+          NOTES="$(awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/  { exit }
+            found && /^\[1\./  { exit }
+            found { print }
+          ' CHANGELOG.md)"
+
+          # Strip trailing whitespace on each line, then trim leading/trailing
+          # blank lines (handles "## [x.y.z] - date " entries with a stray
+          # trailing space on the otherwise-empty line right after the heading).
+          NOTES="$(printf '%s\n' "$NOTES" | sed -e 's/[[:space:]]*$//' \
+            -e '/./,$!d' -e ':a' -e '/^\n*$/{$d;N;ba' -e '}')"
+
+          if [ -z "$NOTES" ]; then
+            echo "::warning::No CHANGELOG.md entry found for version $VERSION, falling back to auto-generated notes."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "notes<<EOF"
+              echo "$NOTES"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -22,4 +60,7 @@ jobs:
           name: "Puffer Card ${{ github.ref_name }}"
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.notes }}
+          # Only fall back to GitHub's auto-generated "Full Changelog" notes
+          # when no matching CHANGELOG.md section was found.
+          generate_release_notes: ${{ steps.changelog.outputs.found != 'true' }}
