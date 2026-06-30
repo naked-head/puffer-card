@@ -5,9 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-06-30
+ 
+### Fixed
+- Chart configuration fields (`show_chart`, `chart_position`, `chart_hours`,
+  `chart_style`, `chart_sensors`) were not localized in the visual editor and
+  always showed up in English regardless of the Home Assistant language. The
+  editor's label resolver now covers all chart-related fields.
+
 ## [1.1.1] - 2026-06-29
 
-### Fix
+### Fixed
  - Translation error on graphical editor window
 
 ## [1.1.0] - 2026-06-29
@@ -42,5 +50,7 @@ First public release.
   shows raw keys.
 - Theme-aware styling.
 
+[1.1.2]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.2
+[1.1.1]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.1
 [1.1.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.0
 [1.0.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.0.0

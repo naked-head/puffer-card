@@ -15,7 +15,7 @@ import {
   svg,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.2";
 
 /* -------------------------------------------------------------------------- */
 /*  Localization                                                              */
