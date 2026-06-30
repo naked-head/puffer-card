@@ -15,7 +15,7 @@ import {
   svg,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const VERSION = "1.2.0";
+const VERSION = "1.2.1";
 
 /* -------------------------------------------------------------------------- */
 /*  Localization                                                              */
@@ -205,6 +205,32 @@ function buildPath(series, tMin, tMax, vMin, vMax, x0, y0, w, h) {
  * compact=true → shorter height, no Y axis labels, no legend (legend is the
  * tank badges themselves in compact mode).
  */
+/**
+ * Downsample a time series by averaging points into a fixed number of equal
+ * time bins. This smooths out noisy raw history data before drawing the
+ * curve, similar to what other history-graph cards do, instead of
+ * interpolating every single recorded state change.
+ */
+function downsample(series, tMin, tMax, targetPoints) {
+  if (series.length <= targetPoints) return series;
+  const span = tMax - tMin || 1;
+  const binMs = span / targetPoints;
+  const bins = new Array(targetPoints).fill(null).map(() => []);
+  for (const p of series) {
+    let idx = Math.floor((p.t - tMin) / binMs);
+    if (idx < 0) idx = 0;
+    if (idx >= targetPoints) idx = targetPoints - 1;
+    bins[idx].push(p.v);
+  }
+  const out = [];
+  bins.forEach((vals, i) => {
+    if (vals.length === 0) return;
+    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+    out.push({ t: tMin + (i + 0.5) * binMs, v: avg });
+  });
+  return out;
+}
+
 function renderChart(seriesList, labels, colors, style, compact) {
   const W = 380, H = compact ? 70 : 120;
   const PAD = { top: 8, right: 8, bottom: compact ? 6 : 20, left: compact ? 6 : 36 };
@@ -218,8 +244,19 @@ function renderChart(seriesList, labels, colors, style, compact) {
   const tMin = Math.min(...allPts.map((p) => p.t));
   const tMax = Math.max(...allPts.map((p) => p.t));
 
+  // Downsample each series to roughly one point per 4px of chart width,
+  // which keeps the curve responsive but visually calm regardless of how
+  // many raw state-changes the History API returned.
+  const targetPoints = Math.max(20, Math.round(cW / 4));
+  const smoothed = seriesList.map((series) =>
+    downsample(
+      series.map((s) => ({ t: s.t.getTime(), v: s.v })),
+      tMin, tMax, targetPoints
+    )
+  );
+
   // Global value extents with a small padding
-  const allV = allPts.map((p) => p.v);
+  const allV = smoothed.flat().map((p) => p.v);
   let vMin = Math.min(...allV), vMax = Math.max(...allV);
   const vPad = (vMax - vMin) * 0.1 || 2;
   vMin -= vPad; vMax += vPad;
@@ -238,12 +275,9 @@ function renderChart(seriesList, labels, colors, style, compact) {
     : [];
 
   // Series paths
-  const paths = seriesList.map((series, i) => {
+  const paths = smoothed.map((series, i) => {
     if (series.length < 2) return "";
-    const { line, area } = buildPath(
-      series.map((s) => ({ t: s.t.getTime(), v: s.v })),
-      tMin, tMax, vMin, vMax, x0, y0, cW, cH
-    );
+    const { line, area } = buildPath(series, tMin, tMax, vMin, vMax, x0, y0, cW, cH);
     const col = colors[i];
     return svg`
       ${style === "area"
@@ -696,7 +730,25 @@ class PufferCardEditor extends LitElement {
     return { hass: { attribute: false }, _config: { state: true } };
   }
 
-  setConfig(config) { this._config = config; }
+  setConfig(config) {
+    // Mirror the same defaulting/materialization logic as PufferCard.setConfig
+    // so the editor's schema (checkboxes, dropdowns) always reflects what the
+    // card will actually render — these are two separate instances with two
+    // separate config copies, so the same logic has to run in both places.
+    const merged = {
+      min_temp: 20, max_temp: 80, layout: "normal", show_labels: true,
+      icon: "", icon_mode: "beside",
+      show_chart: false, chart_hours: 24, chart_position: "below",
+      chart_style: "area",
+      ...config,
+    };
+    if (!Array.isArray(merged.chart_sensors) || merged.chart_sensors.length === 0) {
+      merged.chart_sensors = POSITIONS
+        .map((p) => p.key)
+        .filter((k) => merged[k]?.entity);
+    }
+    this._config = merged;
+  }
 
   _loadI18n() {
     this._reqLangs = this._reqLangs || new Set();
@@ -751,13 +803,13 @@ class PufferCardEditor extends LitElement {
     return [
       { name: "name", selector: { text: {} } },
       { name: "icon", selector: { icon: {} } },
-      ...(this._config?.icon ? [{
+      {
         name: "icon_mode",
         selector: { select: { mode: "dropdown", options: [
           { value: "beside",  label: localize(this.hass, "icon_mode_beside")  },
           { value: "replace", label: localize(this.hass, "icon_mode_replace") },
         ]}},
-      }] : []),
+      },
       { name: "layout", selector: { select: { mode: "dropdown", options: [
         { value: "normal",  label: localize(this.hass, "layout_normal")  },
         { value: "compact", label: localize(this.hass, "layout_compact") },

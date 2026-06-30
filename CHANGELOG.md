@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-06-30
+
+### Fixed
+- The `icon_mode` field was missing from the visual editor when editing an
+  existing card without an icon already set, making the option undiscoverable.
+  It is now always shown.
+- The chart sensor selector bug from 1.2.0 was only fixed in the card itself,
+  not in the visual editor (which keeps its own separate copy of the
+  configuration): on first enabling the chart, the editor's checkboxes still
+  appeared empty even though the chart correctly showed all sensors. The
+  editor now applies the same defaulting logic as the card.
+
+### Changed
+- History chart data is now downsampled (averaged into fixed time bins,
+  roughly one point per 4 px of chart width) before the smoothing curve is
+  drawn. Raw History API data can be noisy with many closely-spaced state
+  changes; without downsampling the smoothed curve still looked jagged. The
+  chart is now visually calmer and closer to other popular history-graph
+  cards, regardless of how many raw data points the sensor produced.
 ## [1.2.0] - 2026-06-30
 
 ### Added
@@ -70,6 +89,7 @@ First public release.
   shows raw keys.
 - Theme-aware styling.
 
+[1.2.1]: https://github.com/naked-head/puffer-card/releases/tag/v1.2.1
 [1.2.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.2.0
 [1.1.2]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.2
 [1.1.1]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.1
