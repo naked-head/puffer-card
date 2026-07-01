@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-07-01
+
+### Fixed
+- Blank chart area and page reload required to recover. Three root causes:
+  1. The refresh logic ran inside `updated()`, which Lit calls after every
+     reactive property change. Setting `_histLoading = true` triggered a
+     re-render, which triggered `updated()` again while hass kept updating
+     in the background, causing cascading fetch calls.
+  2. There was no concurrency guard: two `_fetchHistory()` calls running in
+     parallel would write to `_history` and `_histLoading` out of order,
+     producing inconsistent state visible as repeated flickering followed by
+     a blank chart.
+  3. Any network/API error inside `_fetchHistory()` left `_histLoading`
+     permanently set to `true`, showing only the loading placeholder.
+  The fetch cycle is now driven by `setInterval` started in
+  `connectedCallback` and cleared in `disconnectedCallback`. A `_fetching`
+  flag prevents concurrent calls, and a try/finally block ensures
+  `_histLoading` is always reset even on error.
+
 ## [1.2.1] - 2026-06-30
 
 ### Fixed
@@ -24,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes; without downsampling the smoothed curve still looked jagged. The
   chart is now visually calmer and closer to other popular history-graph
   cards, regardless of how many raw data points the sensor produced.
+  
 ## [1.2.0] - 2026-06-30
 
 ### Added
@@ -89,6 +109,7 @@ First public release.
   shows raw keys.
 - Theme-aware styling.
 
+[1.2.2]: https://github.com/naked-head/puffer-card/releases/tag/v1.2.2
 [1.2.1]: https://github.com/naked-head/puffer-card/releases/tag/v1.2.1
 [1.2.0]: https://github.com/naked-head/puffer-card/releases/tag/v1.2.0
 [1.1.2]: https://github.com/naked-head/puffer-card/releases/tag/v1.1.2

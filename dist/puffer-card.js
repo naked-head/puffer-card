@@ -15,7 +15,7 @@ import {
   svg,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const VERSION = "1.2.1";
+const VERSION = "1.2.2";
 
 /* -------------------------------------------------------------------------- */
 /*  Localization                                                              */
@@ -355,18 +355,20 @@ class PufferCard extends LitElement {
         .filter((k) => merged[k]?.entity);
     }
     this._config = merged;
-    // Reload history when chart-relevant options change
-    if (this._config.show_chart && (
-      !prev ||
+    // If chart-relevant options changed while the card is already mounted,
+    // reset the history cache and restart the polling interval so fresh data
+    // is fetched immediately with the new settings.
+    const chartParamsChanged = prev && this._config.show_chart && (
       prev.show_chart     !== this._config.show_chart     ||
       prev.chart_hours    !== this._config.chart_hours    ||
       prev.top?.entity    !== this._config.top?.entity    ||
       prev.middle?.entity !== this._config.middle?.entity ||
       prev.bottom?.entity !== this._config.bottom?.entity ||
       JSON.stringify(prev.chart_sensors) !== JSON.stringify(this._config.chart_sensors)
-    )) {
+    );
+    if (chartParamsChanged) {
       this._history = new Map();
-      this._fetchHistory();
+      if (this.isConnected) this._startPolling();
     }
   }
 
@@ -389,30 +391,68 @@ class PufferCard extends LitElement {
 
   /* ---- history ---------------------------------------------------------- */
 
+  /**
+   * Fetch history for all configured sensors.
+   * Guards against concurrent calls (_fetching flag) and catches any network
+   * or API errors so _histLoading never gets stuck at true.
+   */
   async _fetchHistory() {
     if (!this.hass || !this._config?.show_chart) return;
+    if (this._fetching) return; // prevent parallel calls
+    this._fetching = true;
     this._histLoading = true;
-    const hours = Number(this._config.chart_hours) || 24;
-    const data = this._data();
-    const wanted = (this._config.chart_sensors || ["top", "middle", "bottom"]);
-    const toFetch = data.filter((p) => wanted.includes(p.key) && p.cfg?.entity);
-    const results = await Promise.all(
-      toFetch.map((p) => fetchHistory(this.hass, p.cfg.entity, hours))
-    );
-    const map = new Map();
-    toFetch.forEach((p, i) => map.set(p.key, results[i]));
-    this._history = map;
-    this._histLoading = false;
+    try {
+      const hours   = Number(this._config.chart_hours) || 24;
+      const data    = this._data();
+      const wanted  = this._config.chart_sensors || ["top", "middle", "bottom"];
+      const toFetch = data.filter((p) => wanted.includes(p.key) && p.cfg?.entity);
+      const results = await Promise.all(
+        toFetch.map((p) => fetchHistory(this.hass, p.cfg.entity, hours))
+      );
+      const map = new Map();
+      toFetch.forEach((p, i) => map.set(p.key, results[i]));
+      this._history = map;
+    } catch (err) {
+      console.warn("[puffer-card] history fetch failed:", err);
+    } finally {
+      this._histLoading = false;
+      this._fetching = false;
+    }
   }
 
-  /** Refresh history when hass updates (throttled: at most once per 60 s). */
+  /** Start the 60-second polling interval when the card is attached to the DOM. */
+  connectedCallback() {
+    super.connectedCallback();
+    if (this._config?.show_chart) this._startPolling();
+  }
+
+  /** Clear the polling interval when the card is removed from the DOM. */
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._stopPolling();
+  }
+
+  _startPolling() {
+    this._stopPolling(); // always clear any existing interval first
+    this._fetchHistory();
+    this._pollInterval = setInterval(() => this._fetchHistory(), 60_000);
+  }
+
+  _stopPolling() {
+    if (this._pollInterval) {
+      clearInterval(this._pollInterval);
+      this._pollInterval = null;
+    }
+  }
+
+  /** Re-start polling when show_chart is toggled on; stop it when toggled off. */
   updated(changed) {
-    if (changed.has("hass") && this._config?.show_chart) {
-      const now = Date.now();
-      if (!this._lastFetch || now - this._lastFetch > 60_000) {
-        this._lastFetch = now;
-        this._fetchHistory();
-      }
+    if (!changed.has("_config")) return;
+    const prev = changed.get("_config");
+    if (this._config?.show_chart && !prev?.show_chart) {
+      this._startPolling();
+    } else if (!this._config?.show_chart && prev?.show_chart) {
+      this._stopPolling();
     }
   }
 
