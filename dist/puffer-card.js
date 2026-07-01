@@ -15,7 +15,7 @@ import {
   svg,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const VERSION = "1.2.2";
+const VERSION = "1.2.3";
 
 /* -------------------------------------------------------------------------- */
 /*  Localization                                                              */
@@ -305,7 +305,8 @@ class PufferCard extends LitElement {
       hass:        { attribute: false },
       _config:     { state: true },
       _history:    { state: true }, // Map<entityId, [{t,v}]>
-      _histLoading:{ state: true },
+      // _histLoading is NOT a reactive property: we manage re-renders manually
+      // so that periodic silent refreshes never cause a visible blank flash.
     };
   }
 
@@ -400,7 +401,12 @@ class PufferCard extends LitElement {
     if (!this.hass || !this._config?.show_chart) return;
     if (this._fetching) return; // prevent parallel calls
     this._fetching = true;
-    this._histLoading = true;
+    // Show the loading placeholder only on the very first fetch (no data yet).
+    const firstLoad = !this._history?.size;
+    if (firstLoad) {
+      this._histLoading = true;
+      this.requestUpdate();
+    }
     try {
       const hours   = Number(this._config.chart_hours) || 24;
       const data    = this._data();
@@ -411,7 +417,9 @@ class PufferCard extends LitElement {
       );
       const map = new Map();
       toFetch.forEach((p, i) => map.set(p.key, results[i]));
+      // Assign the new history and trigger a single re-render.
       this._history = map;
+      this.requestUpdate();
     } catch (err) {
       console.warn("[puffer-card] history fetch failed:", err);
     } finally {
@@ -535,7 +543,7 @@ class PufferCard extends LitElement {
     const style    = this._config.chart_style || "area";
     return html`
       <div class="chart-wrap ${compact ? "chart-compact" : ""}">
-        ${this._histLoading
+        ${this._histLoading && !this._history?.size
           ? html`<div class="chart-loading">…</div>`
           : renderChart(history, labels, colors, style, compact)}
       </div>`;
