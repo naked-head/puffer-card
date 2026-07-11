@@ -7,14 +7,14 @@
 
 A custom [Home Assistant](https://www.home-assistant.io/) **Lovelace card** that
 visually represents a **buffer tank / hot-water cylinder** (a "puffer") used for
-heating and domestic hot water. It shows up to three temperatures at different
+heating and domestic hot water. It shows up to four temperatures at different
 heights and colors the tank according to the real thermal stratification.
 
 <img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/standard.png" alt="Puffer Card – standard layout" width="420">
 
 ## Features
 
-- Shows **1 to 3 temperatures**; with fewer than three values they are spread
+- Shows **1 to 4 temperatures**; with fewer than four values they are spread
   evenly over the tank height.
 - **Color-coded stratification**: each level is colored from blue (cold) to red
   (hot), based on configurable `min`/`max` temperatures.
@@ -26,7 +26,7 @@ heights and colors the tank according to the real thermal stratification.
   (2 h – 48 h), smooth area or line style, and per-sensor visibility.
 - Click any value to open the entity's **more-info** dialog.
 - Built-in **graphical editor** — no YAML required.
-- **Multilingual** UI (English / Italian) following Home Assistant's language.
+- **Multilingual** UI (English / Italian, more welcome) following Home Assistant's language.
 - Adapts to Home Assistant **themes**.
 
 ## Installation
@@ -48,6 +48,7 @@ heights and colors the tank according to the real thermal stratification.
    /config/www/puffer-card/
    ├── puffer-card.js
    └── translations/
+       ├── index.json
        ├── en.json
        └── it.json
    ```
@@ -80,6 +81,9 @@ top:
 middle:
   entity: sensor.buffer_middle
   label: Storage
+extra:
+  entity: sensor.buffer_extra
+  label: Extra
 bottom:
   entity: sensor.buffer_bottom
   label: Return
@@ -90,12 +94,15 @@ chart_style: area       # "area" or "line"
 chart_sensors:          # which positions to include in the chart
   - top
   - middle
+  - extra
   - bottom
 ```
 
-To show **fewer than three values**, simply omit the positions you don't need
+To show **fewer than four values**, simply omit the positions you don't need
 (for example only `top` and `bottom`). The displayed values are then
-distributed evenly over the tank.
+distributed evenly over the tank. With all four positions configured, the
+tank grows slightly taller and badge text shrinks a little so nothing
+overlaps — layouts with 1 to 3 sensors are unaffected.
 
 ### Options
 
@@ -109,7 +116,7 @@ distributed evenly over the tank.
 | `show_labels` | boolean | `true` | Show or hide the labels next to each value |
 | `min_temp` | number | `20` | Temperature mapped to the cold color |
 | `max_temp` | number | `80` | Temperature mapped to the hot color |
-| `top` / `middle` / `bottom` | object | – | A measuring point: `{ entity, label }` |
+| `top` / `middle` / `extra` / `bottom` | object | – | A measuring point: `{ entity, label }` |
 | `*.entity` | string | – | Temperature entity (`sensor`, `number` or `input_number`) |
 | `*.label` | string | localized | Label shown next to the value |
 | `unit` | string | from entity / `°C` | Force the unit of measurement |
@@ -117,7 +124,7 @@ distributed evenly over the tank.
 | `chart_position` | string | `below` | `below` or `above` the tank |
 | `chart_hours` | number | `24` | History period: `2`, `6`, `12`, `24` or `48` |
 | `chart_style` | string | `area` | `area` (filled) or `line` |
-| `chart_sensors` | list | all | Positions to include: `top`, `middle`, `bottom` |
+| `chart_sensors` | list | all | Positions to include: `top`, `middle`, `extra`, `bottom` |
 
 ## Layouts
 
@@ -142,10 +149,18 @@ values move next to the tank.
 
 ### Even distribution
 
-When you configure one or two values, they are evenly distributed over the tank
-height instead of staying at the extremes.
+When you configure fewer than four values, they are evenly distributed over the
+tank height instead of staying at the extremes.
 
 <img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/two-sensors.png" alt="Two values evenly distributed" width="420">
+
+### Four sensors
+
+With all four positions configured, the tank is taller and badge text is a bit
+smaller so the four values stay comfortably spaced; side pipes follow the
+number of configured sensors instead of a fixed pair.
+
+<img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/four-sensors.png" alt="Four sensors, taller tank" width="420">
 
 ## History chart
 
@@ -161,6 +176,34 @@ the tank and in the compact list switch to the same fixed colors, linking the
 live reading to the corresponding chart line.
 
 <img src="https://raw.githubusercontent.com/naked-head/puffer-card/main/images/chart-compact.png" alt="Compact layout with history chart" width="420">
+
+## Languages
+
+The UI language follows Home Assistant's own language setting, with English
+as the fallback when a translation is missing or a language isn't available
+at all.
+
+Translations live under `dist/translations/`: one JSON file per language,
+plus an `index.json` manifest listing which languages are shipped.
+
+```
+dist/translations/
+├── index.json   # { "en": "English", "it": "Italiano" }
+├── en.json      # reference language — every key must exist here
+└── it.json
+```
+
+**To contribute a new language**, no code changes are needed:
+
+1. Copy `en.json` to `<code>.json` (use the language's
+   [IETF tag](https://www.home-assistant.io/integrations/frontend/#language),
+   e.g. `de.json` for German) and translate the values — keep the keys as-is.
+2. Add an entry to `index.json`: `"de": "Deutsch"`.
+3. Run `node scripts/check-translations.js` to confirm every key from
+   `en.json` is present (missing keys don't break anything — they silently
+   fall back to English — but the script helps catch typos and gaps before
+   opening a PR). The same check runs automatically in CI.
+4. Open a pull request.
 
 ## Color scale
 

@@ -5,6 +5,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-05
+
+### Added
+- Fourth optional sensor position (`extra`), sitting between `middle` and
+  `bottom`. Fully backward compatible: existing configs with only
+  `top`/`middle`/`bottom` render pixel-identical to before — the extra
+  slot is simply left unconfigured. With all four positions set, the tank
+  (normal layout) grows taller and badge text shrinks slightly so nothing
+  overlaps; both layouts get slightly smaller fonts in this case.
+- Side pipes in the normal layout now follow the number of configured
+  sensors (1 to 4), each centered on its sensor's height, instead of a
+  fixed pair of decorative pipes.
+- A 4th fixed chart color (teal) so a 4-sensor history chart never repeats
+  a color between series.
+- `dist/translations/index.json`, a manifest listing the languages shipped
+  with the card, plus `scripts/check-translations.js` to validate that
+  every language file has the same keys as the English reference —
+  wired into the `Validate HACS` CI workflow. Documented in the README
+  under "Languages" as the path for contributing a new translation
+  (no code changes required).
+
 ## [1.2.3] - 2026-07-01
 
 ### Fixed
@@ -120,7 +141,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shows raw keys.
 - Theme-aware styling.
 
-[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/naked-head/puffer-card/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/naked-head/puffer-card/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/naked-head/puffer-card/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/naked-head/puffer-card/compare/v1.2.0...v1.2.1

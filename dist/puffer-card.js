@@ -1,7 +1,7 @@
 /**
  * Puffer Card
  * Custom Lovelace card that visually represents a buffer tank / hot-water
- * cylinder with 1 to 3 temperatures placed at different heights.
+ * cylinder with 1 to 4 temperatures placed at different heights.
  * Optionally displays a history chart below (or above) the tank.
  *
  * Repo: https://github.com/naked-head/puffer-card
@@ -15,7 +15,7 @@ import {
   svg,
 } from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
 
-const VERSION = "1.2.3";
+const VERSION = "1.3.0";
 
 /* -------------------------------------------------------------------------- */
 /*  Localization                                                              */
@@ -51,6 +51,7 @@ const FALLBACK_EN = {
   label: "Label",
   pos_top: "Top position",
   pos_middle: "Middle position",
+  pos_extra: "Extra position",
   pos_bottom: "Bottom position",
   layout: "Layout",
   layout_normal: "Standard",
@@ -59,6 +60,7 @@ const FALLBACK_EN = {
   default_title: "Buffer tank",
   label_top: "Flow",
   label_middle: "Storage",
+  label_extra: "Extra",
   label_bottom: "Return",
   show_chart: "Show history chart",
   chart_position: "Chart position",
@@ -90,17 +92,19 @@ function localize(hass, key) {
 const POSITIONS = [
   { key: "top",    labelKey: "label_top"    },
   { key: "middle", labelKey: "label_middle" },
+  { key: "extra",  labelKey: "label_extra"  },
   { key: "bottom", labelKey: "label_bottom" },
 ];
 
 /** Fixed series colors for the chart (independent of temperature ramp). */
-const CHART_COLORS = ["#e53935", "#fb8c00", "#1565c0"];
+const CHART_COLORS = ["#e53935", "#fb8c00", "#1565c0", "#00897b"];
 
 /** Evenly distributed vertical offsets (0 = top, 1 = bottom) for n values. */
 function evenOffsets(n) {
   if (n <= 1) return [0.5];
   if (n === 2) return [0.3, 0.7];
-  return [0.12, 0.5, 0.88];
+  if (n === 3) return [0.12, 0.5, 0.88];
+  return [0.08, 0.36, 0.64, 0.92]; // n === 4
 }
 
 const fireEvent = (node, type, detail = {}) => {
@@ -333,6 +337,7 @@ class PufferCard extends LitElement {
       max_temp: 80,
       top:    { entity: temps[0] || "", label: localize(hass, "label_top")    },
       middle: { entity: temps[1] || "", label: localize(hass, "label_middle") },
+      extra:  { entity: temps[3] || "", label: localize(hass, "label_extra")  },
       bottom: { entity: temps[2] || "", label: localize(hass, "label_bottom") },
     };
   }
@@ -364,6 +369,7 @@ class PufferCard extends LitElement {
       prev.chart_hours    !== this._config.chart_hours    ||
       prev.top?.entity    !== this._config.top?.entity    ||
       prev.middle?.entity !== this._config.middle?.entity ||
+      prev.extra?.entity  !== this._config.extra?.entity  ||
       prev.bottom?.entity !== this._config.bottom?.entity ||
       JSON.stringify(prev.chart_sensors) !== JSON.stringify(this._config.chart_sensors)
     );
@@ -410,7 +416,7 @@ class PufferCard extends LitElement {
     try {
       const hours   = Number(this._config.chart_hours) || 24;
       const data    = this._data();
-      const wanted  = this._config.chart_sensors || ["top", "middle", "bottom"];
+      const wanted  = this._config.chart_sensors || POSITIONS.map((p) => p.key);
       const toFetch = data.filter((p) => wanted.includes(p.key) && p.cfg?.entity);
       const results = await Promise.all(
         toFetch.map((p) => fetchHistory(this.hass, p.cfg.entity, hours))
@@ -520,14 +526,14 @@ class PufferCard extends LitElement {
    */
   _useChartColors(data) {
     if (!this._config.show_chart) return false;
-    const wanted  = this._config.chart_sensors || ["top", "middle", "bottom"];
+    const wanted  = this._config.chart_sensors || POSITIONS.map((p) => p.key);
     const visible = data.filter((p) => wanted.includes(p.key));
     return visible.length > 1;
   }
 
   _dotColor(p, data, min, max) {
     if (this._useChartColors(data)) {
-      const wanted = this._config.chart_sensors || ["top", "middle", "bottom"];
+      const wanted = this._config.chart_sensors || POSITIONS.map((p) => p.key);
       const idx    = data.filter((d) => wanted.includes(d.key)).findIndex((d) => d.key === p.key);
       return idx >= 0 ? CHART_COLORS[idx % CHART_COLORS.length] : tempColor(p.temp, min, max);
     }
@@ -535,7 +541,7 @@ class PufferCard extends LitElement {
   }
 
   _renderChart(data, compact = false) {
-    const wanted   = this._config.chart_sensors || ["top", "middle", "bottom"];
+    const wanted   = this._config.chart_sensors || POSITIONS.map((p) => p.key);
     const series   = data.filter((p) => wanted.includes(p.key));
     const colors   = series.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
     const labels   = series.map((p) => p.label);
@@ -576,14 +582,42 @@ class PufferCard extends LitElement {
 
   /* ---- render: normal layout ------------------------------------------- */
 
-  _y(off) {
-    return 48 + off * 204; // liquid area y 48 -> 252
+  /**
+   * Geometry/typography metrics for the normal-layout tank, based on how
+   * many sensors are configured. 1-3 sensors keep the exact original
+   * pixel layout (full backward compatibility for existing installs);
+   * 4 sensors get a taller tank and smaller badge fonts so nothing overlaps.
+   */
+  _metrics(n) {
+    const quad     = n === 4;
+    const liquidTop = 48;
+    const liquidH   = quad ? 252 : 204;
+    const liquidBot = liquidTop + liquidH;
+    const viewH     = quad ? 360 : 300;
+    return quad
+      ? {
+          quad, liquidTop, liquidH, liquidBot, viewH,
+          badgeRectYOff: 22, dotCyLabelOff: 8, labelYOff: 4,
+          valueYOffLabel: 14, valueYOffNoLabel: 7,
+          fontLabel: 9, fontValue: 17, fontUnit: 10, unitDx: 2,
+        }
+      : {
+          quad, liquidTop, liquidH, liquidBot, viewH,
+          badgeRectYOff: 25, dotCyLabelOff: 9, labelYOff: 5,
+          valueYOffLabel: 16, valueYOffNoLabel: 8,
+          fontLabel: 10, fontValue: 21, fontUnit: 11, unitDx: 3,
+        };
   }
 
-  _badge(p, min, max, showLabels, dotColor) {
-    const y    = this._y(p.off);
-    const val  = p.temp === null ? "—" : this._format(p.temp);
-    const valY = showLabels ? y + 16 : y + 8;
+  _y(off, m) {
+    return m.liquidTop + off * m.liquidH;
+  }
+
+  _badge(p, min, max, showLabels, dotColor, m) {
+    const y      = this._y(p.off, m);
+    const val    = p.temp === null ? "—" : this._format(p.temp);
+    const dotCy  = showLabels ? y - m.dotCyLabelOff : y;
+    const valueY = showLabels ? y + m.valueYOffLabel : y + m.valueYOffNoLabel;
     return svg`
       <g class="badge" @click=${() => this._moreInfo(p.cfg.entity)}>
         <line x1="46" y1="${y}" x2="174" y2="${y}"
@@ -592,15 +626,15 @@ class PufferCard extends LitElement {
         <line x1="180" y1="${y}" x2="212" y2="${y}"
               stroke="var(--divider-color, #cfd8dc)" stroke-width="2"></line>
         <circle cx="180" cy="${y}" r="4.5" fill="${dotColor}"></circle>
-        <rect x="212" y="${y - 25}" width="156" height="50" rx="13"
+        <rect x="212" y="${y - m.badgeRectYOff}" width="156" height="${m.badgeRectYOff * 2}" rx="13"
               fill="var(--card-background-color, #fff)"
               stroke="var(--divider-color, #cfd8dc)" stroke-width="1"></rect>
-        <circle cx="226" cy="${showLabels ? y - 9 : y}" r="4" fill="${dotColor}"></circle>
+        <circle cx="226" cy="${dotCy}" r="4" fill="${dotColor}"></circle>
         ${showLabels
-          ? svg`<text x="237" y="${y - 5}" class="lbl">${p.label}</text>`
+          ? svg`<text x="237" y="${y - m.labelYOff}" class="lbl" style="font-size:${m.fontLabel}px">${p.label}</text>`
           : ""}
-        <text x="${showLabels ? 226 : 240}" y="${valY}" class="val"
-              fill="${tempColor(p.temp, min, max)}">${val}<tspan class="unit" dx="3">${p.unit}</tspan></text>
+        <text x="${showLabels ? 226 : 240}" y="${valueY}" class="val" style="font-size:${m.fontValue}px"
+              fill="${tempColor(p.temp, min, max)}">${val}<tspan class="unit" dx="${m.unitDx}" style="font-size:${m.fontUnit}px">${p.unit}</tspan></text>
       </g>`;
   }
 
@@ -608,27 +642,37 @@ class PufferCard extends LitElement {
     const { stops, bottomColor } = this._gradient(data, min, max);
     const useChart   = this._config.show_chart;
     const chartAbove = this._config.chart_position === "above";
+    const m = this._metrics(data.length);
+    // One side pipe per configured sensor, centered on its height, instead
+    // of a fixed pair of decorative pipes unrelated to how many sensors exist.
+    const sidePipes = data.map((p) => {
+      const yy = this._y(p.off, m);
+      return svg`<rect x="176" y="${yy - 5.5}" width="34" height="11" rx="3" fill="#9fb0b8"></rect>`;
+    });
+    // Insulation bands are purely decorative; keep them proportionally
+    // placed at ~35% / ~65% of the liquid area regardless of tank height.
+    const bandY1 = m.liquidTop + m.liquidH * 0.35;
+    const bandY2 = m.liquidTop + m.liquidH * 0.65;
     const tank = html`
-      <svg viewBox="0 0 380 300" width="100%" preserveAspectRatio="xMidYMid meet">
+      <svg viewBox="0 0 380 ${m.viewH}" width="100%" preserveAspectRatio="xMidYMid meet">
         ${this._defs(stops, "liquidGrad")}
-        <rect x="101" y="18"  width="18" height="34" rx="3" fill="#9fb0b8"></rect>
-        <rect x="101" y="250" width="18" height="28" rx="3" fill="#9fb0b8"></rect>
-        <rect x="176" y="92"  width="34" height="11" rx="3" fill="#9fb0b8"></rect>
-        <rect x="176" y="200" width="34" height="11" rx="3" fill="#9fb0b8"></rect>
+        <rect x="101" y="18" width="18" height="34" rx="3" fill="#9fb0b8"></rect>
+        <rect x="101" y="${m.liquidBot}" width="18" height="28" rx="3" fill="#9fb0b8"></rect>
+        ${sidePipes}
         <g filter="url(#ds)">
-          <ellipse cx="110" cy="252" rx="70" ry="15" fill="${bottomColor}"></ellipse>
-          <rect x="40" y="48" width="140" height="204" fill="url(#liquidGrad)"></rect>
-          <rect x="40" y="48" width="140" height="204" fill="url(#sheen)"></rect>
-          <path d="M40,252 A70,15 0 0 0 180,252"
+          <ellipse cx="110" cy="${m.liquidBot}" rx="70" ry="15" fill="${bottomColor}"></ellipse>
+          <rect x="40" y="${m.liquidTop}" width="140" height="${m.liquidH}" fill="url(#liquidGrad)"></rect>
+          <rect x="40" y="${m.liquidTop}" width="140" height="${m.liquidH}" fill="url(#sheen)"></rect>
+          <path d="M40,${m.liquidBot} A70,15 0 0 0 180,${m.liquidBot}"
                 fill="none" stroke="rgba(0,0,0,0.25)" stroke-width="2"></path>
-          <line x1="40"  y1="48" x2="40"  y2="252" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
-          <line x1="180" y1="48" x2="180" y2="252" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
-          <line x1="42" y1="120" x2="178" y2="120" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
-          <line x1="42" y1="184" x2="178" y2="184" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
-          <ellipse cx="110" cy="48" rx="70" ry="15" fill="url(#lidGrad)"
+          <line x1="40"  y1="${m.liquidTop}" x2="40"  y2="${m.liquidBot}" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
+          <line x1="180" y1="${m.liquidTop}" x2="180" y2="${m.liquidBot}" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
+          <line x1="42" y1="${bandY1}" x2="178" y2="${bandY1}" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
+          <line x1="42" y1="${bandY2}" x2="178" y2="${bandY2}" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
+          <ellipse cx="110" cy="${m.liquidTop}" rx="70" ry="15" fill="url(#lidGrad)"
                    stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></ellipse>
         </g>
-        ${data.map((p) => this._badge(p, min, max, showLabels, this._dotColor(p, data, min, max)))}
+        ${data.map((p) => this._badge(p, min, max, showLabels, this._dotColor(p, data, min, max), m))}
       </svg>`;
     return html`
       ${useChart && chartAbove  ? this._renderChart(data, false) : ""}
@@ -665,8 +709,9 @@ class PufferCard extends LitElement {
   _renderCompact(data, min, max, showLabels) {
     const useChart   = this._config.show_chart;
     const chartAbove = this._config.chart_position === "above";
+    const quad       = data.length === 4;
     const body = html`
-      <div class="compact">
+      <div class="compact ${quad ? "is-quad" : ""}">
         <div class="mini">${this._miniTank(data, min, max)}</div>
         <div class="rows">
           ${data.map((p) => {
@@ -756,6 +801,12 @@ class PufferCard extends LitElement {
       .rval { flex: 0 0 auto; margin-left: auto; font-weight: 700; font-size: 1.15rem; }
       .row.no-labels .rval { margin-left: 0; }
       .runit { font-size: 0.75rem; font-weight: 600; margin-left: 2px; }
+      /* 4-sensor compact mode: slightly smaller text so 4 rows stay comfortable */
+      .compact.is-quad .rows { gap: 3px; }
+      .compact.is-quad .rlabel { font-size: 0.85rem; }
+      .compact.is-quad .rval { font-size: 1rem; }
+      .compact.is-quad .runit { font-size: 0.68rem; }
+      .compact.is-quad .dot { width: 9px; height: 9px; }
       /* chart */
       .chart-wrap { width: 100%; overflow: hidden; }
       .chart-wrap.chart-compact { margin: 4px 0; }
@@ -869,6 +920,7 @@ class PufferCardEditor extends LitElement {
       ]},
       { name: "top",    type: "expandable", title: localize(this.hass, "pos_top"),    expanded: true, schema: sub },
       { name: "middle", type: "expandable", title: localize(this.hass, "pos_middle"), schema: sub },
+      { name: "extra",  type: "expandable", title: localize(this.hass, "pos_extra"),  schema: sub },
       { name: "bottom", type: "expandable", title: localize(this.hass, "pos_bottom"), schema: sub },
       { name: "show_chart", selector: { boolean: {} } },
       ...chartSchema,
@@ -917,7 +969,7 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "puffer-card",
   name: "Puffer Card",
-  description: "Represents a buffer tank / boiler with 1-3 temperatures at different heights.",
+  description: "Represents a buffer tank / boiler with 1-4 temperatures at different heights.",
   preview: true,
   documentationURL: "https://github.com/naked-head/puffer-card",
 });
