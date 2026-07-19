@@ -1,4 +1,7 @@
-name: Validate HACS
+name: Validate
+
+permissions:
+  contents: read
 
 on:
   push:
@@ -16,13 +19,19 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
+
       - name: HACS validation
         uses: hacs/action@main
         with:
           category: plugin
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Check JS syntax
+        run: node --check --input-type=module < dist/puffer-card.js
+
       - name: Check translation completeness
         run: node scripts/check-translations.js
