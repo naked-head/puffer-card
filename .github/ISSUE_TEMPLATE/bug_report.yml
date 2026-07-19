@@ -1,0 +1,88 @@
+name: Bug Report
+description: Report a problem with the Puffer Card
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening an issue, please check if a similar one already exists.
+        A screenshot and your card configuration are essential to diagnose rendering problems.
+
+  - type: input
+    id: card_version
+    attributes:
+      label: Card version
+      description: Shown in the browser console on load, or found in CHANGELOG.md.
+      placeholder: "e.g. 1.3.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: Found in Settings → About.
+      placeholder: "e.g. 2026.7.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: How did you install the card?
+      options:
+        - HACS
+        - Manual (resource added by hand)
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      description: Which browser and platform? Rendering bugs are often browser-specific.
+      placeholder: "e.g. Firefox 128 on Linux, Safari on iOS"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem clearly. What did you expect, what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: card_config
+    attributes:
+      label: Card configuration (YAML)
+      description: The full YAML of the card from the dashboard, with entity names anonymized if needed.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Browser console output
+      description: Open the browser developer tools (F12) → Console tab, reproduce the issue, and paste any errors here.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag and drop a screenshot showing the problem. For rendering issues this is the single most useful thing you can provide.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else relevant — other custom cards, theme in use, etc.
+    validations:
+      required: false
