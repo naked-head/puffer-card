@@ -1,0 +1,4 @@
+# dist/puffer-card.js is a generated bundle: collapse it in GitHub diffs and
+# exclude it from language statistics. It is committed on purpose (manual
+# installs and HACS installs from tagged source both read it directly).
+dist/puffer-card.js linguist-generated=true

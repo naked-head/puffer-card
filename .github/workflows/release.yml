@@ -18,10 +18,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # No asset is attached on purpose: for a multi-file plugin HACS downloads
-      # the whole dist/ folder (card + translations) from the tagged source.
-      # Make sure the VERSION constant in dist/puffer-card.js matches the tag
-      # before creating the tag.
+      # No asset is attached yet. Attaching one flips HACS to single-file
+      # installs (repositories/plugin.py::update_filenames), which is only safe
+      # now that the card bundles its own translations — that switch is a
+      # separate, deliberate change.
 
       - name: Resolve version from tag
         id: version
@@ -40,6 +40,37 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "Tag $GITHUB_REF_NAME -> version=$VERSION, base=$BASE_VERSION"
+
+      - name: Verify package.json matches the tag
+        env:
+          BASE_VERSION: ${{ steps.version.outputs.base_version }}
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "$BASE_VERSION" ]; then
+            echo "::error::package.json version is $PKG_VERSION but the tag says $BASE_VERSION. Bump package.json and re-tag."
+            exit 1
+          fi
+          echo "package.json version $PKG_VERSION matches tag."
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Rebuilds with the full tag as the version string, so a pre-release
+      # build reports v1.4.0-beta.1 rather than package.json's 1.4.0. The
+      # result is not committed: it only matters once an asset is attached.
+      - name: Build with the tag version
+        env:
+          PUFFER_VERSION: ${{ steps.version.outputs.version }}
+        run: npm run build
+
+      - name: Verify translations are in the bundle
+        run: node scripts/check-translations.js
 
       - name: Extract release notes from CHANGELOG.md
         id: changelog

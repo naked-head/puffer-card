@@ -1,567 +1,27 @@
-/**
- * Puffer Card
- * Custom Lovelace card that visually represents a buffer tank / hot-water
- * cylinder with 1 to 4 temperatures placed at different heights.
- * Optionally displays a history chart below (or above) the tank.
- *
- * Repo: https://github.com/naked-head/puffer-card
- * License: MIT
- */
-
-import {
-  LitElement,
-  html,
-  css,
-  svg,
-} from "https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js";
-
-const VERSION = "1.3.0";
-
-/* -------------------------------------------------------------------------- */
-/*  Localization                                                              */
-/* -------------------------------------------------------------------------- */
-
-const _i18n = {};
-const _i18nPromise = {};
-
-function i18nUrl(lang) {
-  return new URL(`./translations/${lang}.json`, import.meta.url);
-}
-
-function loadLanguage(lang) {
-  if (_i18nPromise[lang]) return _i18nPromise[lang];
-  _i18nPromise[lang] = fetch(i18nUrl(lang))
-    .then((r) => (r.ok ? r.json() : null))
-    .catch(() => null)
-    .then((data) => { _i18n[lang] = data; return data; });
-  return _i18nPromise[lang];
-}
-
-function langCandidates(hass) {
-  const raw = (hass && (hass.locale?.language || hass.language)) || "en";
-  const base = raw.split("-")[0];
-  return [...new Set([raw, base, "en"])];
-}
-
-const FALLBACK_EN = {
-  name: "Card title",
-  min_temp: "Min temperature (cold color)",
-  max_temp: "Max temperature (hot color)",
-  entity: "Temperature entity",
-  label: "Label",
-  pos_top: "Top position",
-  pos_middle: "Middle position",
-  pos_extra: "Extra position",
-  pos_bottom: "Bottom position",
-  layout: "Layout",
-  layout_normal: "Standard",
-  layout_compact: "Compact",
-  show_labels: "Show labels",
-  default_title: "Buffer tank",
-  label_top: "Flow",
-  label_middle: "Storage",
-  label_extra: "Extra",
-  label_bottom: "Return",
-  show_chart: "Show history chart",
-  chart_position: "Chart position",
-  chart_above: "Above",
-  chart_below: "Below",
-  chart_hours: "History period",
-  chart_style: "Chart style",
-  chart_style_area: "Area",
-  chart_style_line: "Lines only",
-  chart_sensors: "Sensors to show in chart",
-  icon: "Icon",
-  icon_mode: "Icon position",
-  icon_mode_beside: "Beside title",
-  icon_mode_replace: "Replace title",
-};
-
-function localize(hass, key) {
-  for (const l of langCandidates(hass)) {
-    const dict = _i18n[l];
-    if (dict && dict[key] != null) return dict[key];
-  }
-  return FALLBACK_EN[key] ?? key;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Utilities                                                                 */
-/* -------------------------------------------------------------------------- */
-
-const POSITIONS = [
-  { key: "top",    labelKey: "label_top"    },
-  { key: "middle", labelKey: "label_middle" },
-  { key: "extra",  labelKey: "label_extra"  },
-  { key: "bottom", labelKey: "label_bottom" },
-];
-
-/** Fixed series colors for the chart (independent of temperature ramp). */
-const CHART_COLORS = ["#e53935", "#fb8c00", "#1565c0", "#00897b"];
-
-/** Evenly distributed vertical offsets (0 = top, 1 = bottom) for n values. */
-function evenOffsets(n) {
-  if (n <= 1) return [0.5];
-  if (n === 2) return [0.3, 0.7];
-  if (n === 3) return [0.12, 0.5, 0.88];
-  return [0.08, 0.36, 0.64, 0.92]; // n === 4
-}
-
-const fireEvent = (node, type, detail = {}) => {
-  const event = new Event(type, { bubbles: true, composed: true, cancelable: false });
-  event.detail = detail;
-  node.dispatchEvent(event);
-};
-
-function lerpColor(a, b, t) {
-  const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
-  const ar = ah >> 16, ag = (ah >> 8) & 255, ab = ah & 255;
-  const br = bh >> 16, bg = (bh >> 8) & 255, bb = bh & 255;
-  return `rgb(${Math.round(ar+(br-ar)*t)},${Math.round(ag+(bg-ag)*t)},${Math.round(ab+(bb-ab)*t)})`;
-}
-
-const TEMP_RAMP = [
-  [0.0, "#1565c0"], [0.3, "#29b6f6"], [0.55, "#ffca28"],
-  [0.78, "#fb8c00"], [1.0, "#e53935"],
-];
-
-function tempColor(t, min, max) {
-  if (t === null || isNaN(t)) return "#9e9e9e";
-  let f = Math.max(0, Math.min(1, (t - min) / (max - min)));
-  for (let i = 1; i < TEMP_RAMP.length; i++) {
-    const [p0, c0] = TEMP_RAMP[i - 1], [p1, c1] = TEMP_RAMP[i];
-    if (f <= p1) return lerpColor(c0, c1, (f - p0) / (p1 - p0));
-  }
-  return TEMP_RAMP[TEMP_RAMP.length - 1][1];
-}
-
-/* -------------------------------------------------------------------------- */
-/*  History API                                                               */
-/* -------------------------------------------------------------------------- */
-
-const HOUR_OPTIONS = [2, 6, 12, 24, 48];
-
-/**
- * Fetch history for one entity via the HA REST history API.
- * Returns an array of { t: Date, v: number } sorted ascending.
- */
-async function fetchHistory(hass, entityId, hours) {
-  const end   = new Date();
-  const start = new Date(end.getTime() - hours * 3600 * 1000);
-  const url   = `/api/history/period/${start.toISOString()}` +
-                `?filter_entity_id=${entityId}&end_time=${end.toISOString()}&minimal_response=true`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${hass.auth.data.access_token}` },
-  });
-  if (!res.ok) return [];
-  const json = await res.json();
-  // history API returns [[...states]] — one array per entity
-  const states = json[0] || [];
-  return states
-    .filter((s) => s.state !== "unavailable" && s.state !== "unknown")
-    .map((s) => ({ t: new Date(s.last_changed || s.lu * 1000), v: Number(s.state) }))
-    .filter((s) => !isNaN(s.v));
-}
-
-/* -------------------------------------------------------------------------- */
-/*  SVG chart renderer                                                        */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Build a smooth SVG path (Catmull-Rom converted to cubic Béziers) and an
- * optional area fill from a series of {t,v} points mapped into a
- * [x0,y0,w,h] box, given the global time and value extents.
- * Falls back to a straight polyline for fewer than 3 points.
- */
-function buildPath(series, tMin, tMax, vMin, vMax, x0, y0, w, h) {
-  if (series.length < 2) return { line: "", area: "" };
-  const px = (t) => x0 + ((t - tMin) / (tMax - tMin)) * w;
-  const py = (v) => y0 + h - ((v - vMin) / (vMax - vMin)) * h;
-  const pts = series.map((s) => [px(s.t), py(s.v)]);
-
-  let line;
-  if (pts.length < 3) {
-    line = `M${pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("L")}`;
-  } else {
-    // Catmull-Rom -> cubic Bézier conversion (uniform, tension 1).
-    line = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i - 1] || pts[i];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2] || p2;
-      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
-      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
-      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
-      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
-      line += `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
-    }
-  }
-
-  const lastPt = pts[pts.length - 1];
-  const area = `${line}L${lastPt[0].toFixed(1)},${(y0 + h).toFixed(1)}` +
-               `L${x0.toFixed(1)},${(y0 + h).toFixed(1)}Z`;
-  return { line, area };
-}
-
-/**
- * Render an SVG history chart for multiple series.
- * compact=true → shorter height, no Y axis labels, no legend (legend is the
- * tank badges themselves in compact mode).
- */
-/**
- * Downsample a time series by averaging points into a fixed number of equal
- * time bins. This smooths out noisy raw history data before drawing the
- * curve, similar to what other history-graph cards do, instead of
- * interpolating every single recorded state change.
- */
-function downsample(series, tMin, tMax, targetPoints) {
-  if (series.length <= targetPoints) return series;
-  const span = tMax - tMin || 1;
-  const binMs = span / targetPoints;
-  const bins = new Array(targetPoints).fill(null).map(() => []);
-  for (const p of series) {
-    let idx = Math.floor((p.t - tMin) / binMs);
-    if (idx < 0) idx = 0;
-    if (idx >= targetPoints) idx = targetPoints - 1;
-    bins[idx].push(p.v);
-  }
-  const out = [];
-  bins.forEach((vals, i) => {
-    if (vals.length === 0) return;
-    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-    out.push({ t: tMin + (i + 0.5) * binMs, v: avg });
-  });
-  return out;
-}
-
-function renderChart(seriesList, labels, colors, style, compact) {
-  const W = 380, H = compact ? 70 : 120;
-  const PAD = { top: 8, right: 8, bottom: compact ? 6 : 20, left: compact ? 6 : 36 };
-  const cW = W - PAD.left - PAD.right;
-  const cH = H - PAD.top - PAD.bottom;
-  const x0 = PAD.left, y0 = PAD.top;
-
-  // Global time extents
-  const allPts = seriesList.flat();
-  if (allPts.length === 0) return svg`<svg viewBox="0 0 ${W} ${H}" width="100%"></svg>`;
-  const tMin = Math.min(...allPts.map((p) => p.t));
-  const tMax = Math.max(...allPts.map((p) => p.t));
-
-  // Downsample each series to roughly one point per 4px of chart width,
-  // which keeps the curve responsive but visually calm regardless of how
-  // many raw state-changes the History API returned.
-  const targetPoints = Math.max(20, Math.round(cW / 4));
-  const smoothed = seriesList.map((series) =>
-    downsample(
-      series.map((s) => ({ t: s.t.getTime(), v: s.v })),
-      tMin, tMax, targetPoints
-    )
-  );
-
-  // Global value extents with a small padding
-  const allV = smoothed.flat().map((p) => p.v);
-  let vMin = Math.min(...allV), vMax = Math.max(...allV);
-  const vPad = (vMax - vMin) * 0.1 || 2;
-  vMin -= vPad; vMax += vPad;
-
-  // Y-axis labels (4 ticks, only in non-compact mode)
-  const yTicks = !compact
-    ? [0, 0.33, 0.66, 1].map((f) => {
-        const v = vMin + f * (vMax - vMin);
-        const cy = y0 + cH - f * cH;
-        return svg`
-          <line x1="${x0}" y1="${cy.toFixed(1)}" x2="${(x0 + cW).toFixed(1)}" y2="${cy.toFixed(1)}"
+/*! Puffer Card v1.4.0 | MIT | https://github.com/naked-head/puffer-card
+ *  Generated by scripts/build.mjs — do not edit this file by hand.
+ *  Bundles Lit v3.3.3 (BSD-3-Clause, see notice at the end of this file). */
+var Dt=Object.defineProperty;var Ft=(r,t,e)=>t in r?Dt(r,t,{enumerable:!0,configurable:!0,writable:!0,value:e}):r[t]=e;var yt=(r,t,e)=>Ft(r,typeof t!="symbol"?t+"":t,e);var V=globalThis,W=V.ShadowRoot&&(V.ShadyCSS===void 0||V.ShadyCSS.nativeShadow)&&"adoptedStyleSheets"in Document.prototype&&"replace"in CSSStyleSheet.prototype,tt=Symbol(),$t=new WeakMap,U=class{constructor(t,e,s){if(this._$cssResult$=!0,s!==tt)throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");this.cssText=t,this.t=e}get styleSheet(){let t=this.o,e=this.t;if(W&&t===void 0){let s=e!==void 0&&e.length===1;s&&(t=$t.get(e)),t===void 0&&((this.o=t=new CSSStyleSheet).replaceSync(this.cssText),s&&$t.set(e,t))}return t}toString(){return this.cssText}},bt=r=>new U(typeof r=="string"?r:r+"",void 0,tt),et=(r,...t)=>{let e=r.length===1?r[0]:t.reduce((s,o,i)=>s+(n=>{if(n._$cssResult$===!0)return n.cssText;if(typeof n=="number")return n;throw Error("Value passed to 'css' function must be a 'css' function result: "+n+". Use 'unsafeCSS' to pass non-literal values, but take care to ensure page security.")})(o)+r[i+1],r[0]);return new U(e,r,tt)},xt=(r,t)=>{if(W)r.adoptedStyleSheets=t.map(e=>e instanceof CSSStyleSheet?e:e.styleSheet);else for(let e of t){let s=document.createElement("style"),o=V.litNonce;o!==void 0&&s.setAttribute("nonce",o),s.textContent=e.cssText,r.appendChild(s)}},st=W?r=>r:r=>r instanceof CSSStyleSheet?(t=>{let e="";for(let s of t.cssRules)e+=s.cssText;return bt(e)})(r):r;var{is:jt,defineProperty:Yt,getOwnPropertyDescriptor:Gt,getOwnPropertyNames:Vt,getOwnPropertySymbols:Wt,getPrototypeOf:Kt}=Object,K=globalThis,vt=K.trustedTypes,Jt=vt?vt.emptyScript:"",Zt=K.reactiveElementPolyfillSupport,q=(r,t)=>r,ot={toAttribute(r,t){switch(t){case Boolean:r=r?Jt:null;break;case Object:case Array:r=r==null?r:JSON.stringify(r)}return r},fromAttribute(r,t){let e=r;switch(t){case Boolean:e=r!==null;break;case Number:e=r===null?null:Number(r);break;case Object:case Array:try{e=JSON.parse(r)}catch{e=null}}return e}},At=(r,t)=>!jt(r,t),wt={attribute:!0,type:String,converter:ot,reflect:!1,useDefault:!1,hasChanged:At};Symbol.metadata??=Symbol("metadata"),K.litPropertyMetadata??=new WeakMap;var v=class extends HTMLElement{static addInitializer(t){this._$Ei(),(this.l??=[]).push(t)}static get observedAttributes(){return this.finalize(),this._$Eh&&[...this._$Eh.keys()]}static createProperty(t,e=wt){if(e.state&&(e.attribute=!1),this._$Ei(),this.prototype.hasOwnProperty(t)&&((e=Object.create(e)).wrapped=!0),this.elementProperties.set(t,e),!e.noAccessor){let s=Symbol(),o=this.getPropertyDescriptor(t,s,e);o!==void 0&&Yt(this.prototype,t,o)}}static getPropertyDescriptor(t,e,s){let{get:o,set:i}=Gt(this.prototype,t)??{get(){return this[e]},set(n){this[e]=n}};return{get:o,set(n){let l=o?.call(this);i?.call(this,n),this.requestUpdate(t,l,s)},configurable:!0,enumerable:!0}}static getPropertyOptions(t){return this.elementProperties.get(t)??wt}static _$Ei(){if(this.hasOwnProperty(q("elementProperties")))return;let t=Kt(this);t.finalize(),t.l!==void 0&&(this.l=[...t.l]),this.elementProperties=new Map(t.elementProperties)}static finalize(){if(this.hasOwnProperty(q("finalized")))return;if(this.finalized=!0,this._$Ei(),this.hasOwnProperty(q("properties"))){let e=this.properties,s=[...Vt(e),...Wt(e)];for(let o of s)this.createProperty(o,e[o])}let t=this[Symbol.metadata];if(t!==null){let e=litPropertyMetadata.get(t);if(e!==void 0)for(let[s,o]of e)this.elementProperties.set(s,o)}this._$Eh=new Map;for(let[e,s]of this.elementProperties){let o=this._$Eu(e,s);o!==void 0&&this._$Eh.set(o,e)}this.elementStyles=this.finalizeStyles(this.styles)}static finalizeStyles(t){let e=[];if(Array.isArray(t)){let s=new Set(t.flat(1/0).reverse());for(let o of s)e.unshift(st(o))}else t!==void 0&&e.push(st(t));return e}static _$Eu(t,e){let s=e.attribute;return s===!1?void 0:typeof s=="string"?s:typeof t=="string"?t.toLowerCase():void 0}constructor(){super(),this._$Ep=void 0,this.isUpdatePending=!1,this.hasUpdated=!1,this._$Em=null,this._$Ev()}_$Ev(){this._$ES=new Promise(t=>this.enableUpdating=t),this._$AL=new Map,this._$E_(),this.requestUpdate(),this.constructor.l?.forEach(t=>t(this))}addController(t){(this._$EO??=new Set).add(t),this.renderRoot!==void 0&&this.isConnected&&t.hostConnected?.()}removeController(t){this._$EO?.delete(t)}_$E_(){let t=new Map,e=this.constructor.elementProperties;for(let s of e.keys())this.hasOwnProperty(s)&&(t.set(s,this[s]),delete this[s]);t.size>0&&(this._$Ep=t)}createRenderRoot(){let t=this.shadowRoot??this.attachShadow(this.constructor.shadowRootOptions);return xt(t,this.constructor.elementStyles),t}connectedCallback(){this.renderRoot??=this.createRenderRoot(),this.enableUpdating(!0),this._$EO?.forEach(t=>t.hostConnected?.())}enableUpdating(t){}disconnectedCallback(){this._$EO?.forEach(t=>t.hostDisconnected?.())}attributeChangedCallback(t,e,s){this._$AK(t,s)}_$ET(t,e){let s=this.constructor.elementProperties.get(t),o=this.constructor._$Eu(t,s);if(o!==void 0&&s.reflect===!0){let i=(s.converter?.toAttribute!==void 0?s.converter:ot).toAttribute(e,s.type);this._$Em=t,i==null?this.removeAttribute(o):this.setAttribute(o,i),this._$Em=null}}_$AK(t,e){let s=this.constructor,o=s._$Eh.get(t);if(o!==void 0&&this._$Em!==o){let i=s.getPropertyOptions(o),n=typeof i.converter=="function"?{fromAttribute:i.converter}:i.converter?.fromAttribute!==void 0?i.converter:ot;this._$Em=o;let l=n.fromAttribute(e,i.type);this[o]=l??this._$Ej?.get(o)??l,this._$Em=null}}requestUpdate(t,e,s,o=!1,i){if(t!==void 0){let n=this.constructor;if(o===!1&&(i=this[t]),s??=n.getPropertyOptions(t),!((s.hasChanged??At)(i,e)||s.useDefault&&s.reflect&&i===this._$Ej?.get(t)&&!this.hasAttribute(n._$Eu(t,s))))return;this.C(t,e,s)}this.isUpdatePending===!1&&(this._$ES=this._$EP())}C(t,e,{useDefault:s,reflect:o,wrapped:i},n){s&&!(this._$Ej??=new Map).has(t)&&(this._$Ej.set(t,n??e??this[t]),i!==!0||n!==void 0)||(this._$AL.has(t)||(this.hasUpdated||s||(e=void 0),this._$AL.set(t,e)),o===!0&&this._$Em!==t&&(this._$Eq??=new Set).add(t))}async _$EP(){this.isUpdatePending=!0;try{await this._$ES}catch(e){Promise.reject(e)}let t=this.scheduleUpdate();return t!=null&&await t,!this.isUpdatePending}scheduleUpdate(){return this.performUpdate()}performUpdate(){if(!this.isUpdatePending)return;if(!this.hasUpdated){if(this.renderRoot??=this.createRenderRoot(),this._$Ep){for(let[o,i]of this._$Ep)this[o]=i;this._$Ep=void 0}let s=this.constructor.elementProperties;if(s.size>0)for(let[o,i]of s){let{wrapped:n}=i,l=this[o];n!==!0||this._$AL.has(o)||l===void 0||this.C(o,void 0,i,l)}}let t=!1,e=this._$AL;try{t=this.shouldUpdate(e),t?(this.willUpdate(e),this._$EO?.forEach(s=>s.hostUpdate?.()),this.update(e)):this._$EM()}catch(s){throw t=!1,this._$EM(),s}t&&this._$AE(e)}willUpdate(t){}_$AE(t){this._$EO?.forEach(e=>e.hostUpdated?.()),this.hasUpdated||(this.hasUpdated=!0,this.firstUpdated(t)),this.updated(t)}_$EM(){this._$AL=new Map,this.isUpdatePending=!1}get updateComplete(){return this.getUpdateComplete()}getUpdateComplete(){return this._$ES}shouldUpdate(t){return!0}update(t){this._$Eq&&=this._$Eq.forEach(e=>this._$ET(e,this[e])),this._$EM()}updated(t){}firstUpdated(t){}};v.elementStyles=[],v.shadowRootOptions={mode:"open"},v[q("elementProperties")]=new Map,v[q("finalized")]=new Map,Zt?.({ReactiveElement:v}),(K.reactiveElementVersions??=[]).push("2.1.2");var ht=globalThis,St=r=>r,J=ht.trustedTypes,Ct=J?J.createPolicy("lit-html",{createHTML:r=>r}):void 0,Nt="$lit$",A=`lit$${Math.random().toFixed(9).slice(2)}$`,Tt="?"+A,Qt=`<${Tt}>`,O=document,I=()=>O.createComment(""),B=r=>r===null||typeof r!="object"&&typeof r!="function",dt=Array.isArray,Xt=r=>dt(r)||typeof r?.[Symbol.iterator]=="function",it=`[ 	
+\f\r]`,z=/<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g,Et=/-->/g,kt=/>/g,k=RegExp(`>|${it}(?:([^\\s"'>=/]+)(${it}*=${it}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`,"g"),Pt=/'/g,Ot=/"/g,Rt=/^(?:script|style|textarea|title)$/i,pt=r=>(t,...e)=>({_$litType$:r,strings:t,values:e}),y=pt(1),x=pt(2),$e=pt(3),M=Symbol.for("lit-noChange"),_=Symbol.for("lit-nothing"),Mt=new WeakMap,P=O.createTreeWalker(O,129);function Ht(r,t){if(!dt(r)||!r.hasOwnProperty("raw"))throw Error("invalid template strings array");return Ct!==void 0?Ct.createHTML(t):t}var te=(r,t)=>{let e=r.length-1,s=[],o,i=t===2?"<svg>":t===3?"<math>":"",n=z;for(let l=0;l<e;l++){let c=r[l],a,d,h=-1,p=0;for(;p<c.length&&(n.lastIndex=p,d=n.exec(c),d!==null);)p=n.lastIndex,n===z?d[1]==="!--"?n=Et:d[1]!==void 0?n=kt:d[2]!==void 0?(Rt.test(d[2])&&(o=RegExp("</"+d[2],"g")),n=k):d[3]!==void 0&&(n=k):n===k?d[0]===">"?(n=o??z,h=-1):d[1]===void 0?h=-2:(h=n.lastIndex-d[2].length,a=d[1],n=d[3]===void 0?k:d[3]==='"'?Ot:Pt):n===Ot||n===Pt?n=k:n===Et||n===kt?n=z:(n=k,o=void 0);let m=n===k&&r[l+1].startsWith("/>")?" ":"";i+=n===z?c+Qt:h>=0?(s.push(a),c.slice(0,h)+Nt+c.slice(h)+A+m):c+A+(h===-2?l:m)}return[Ht(r,i+(r[e]||"<?>")+(t===2?"</svg>":t===3?"</math>":"")),s]},D=class r{constructor({strings:t,_$litType$:e},s){let o;this.parts=[];let i=0,n=0,l=t.length-1,c=this.parts,[a,d]=te(t,e);if(this.el=r.createElement(a,s),P.currentNode=this.el.content,e===2||e===3){let h=this.el.content.firstChild;h.replaceWith(...h.childNodes)}for(;(o=P.nextNode())!==null&&c.length<l;){if(o.nodeType===1){if(o.hasAttributes())for(let h of o.getAttributeNames())if(h.endsWith(Nt)){let p=d[n++],m=o.getAttribute(h).split(A),$=/([.?@])?(.*)/.exec(p);c.push({type:1,index:i,name:$[2],strings:m,ctor:$[1]==="."?nt:$[1]==="?"?at:$[1]==="@"?lt:R}),o.removeAttribute(h)}else h.startsWith(A)&&(c.push({type:6,index:i}),o.removeAttribute(h));if(Rt.test(o.tagName)){let h=o.textContent.split(A),p=h.length-1;if(p>0){o.textContent=J?J.emptyScript:"";for(let m=0;m<p;m++)o.append(h[m],I()),P.nextNode(),c.push({type:2,index:++i});o.append(h[p],I())}}}else if(o.nodeType===8)if(o.data===Tt)c.push({type:2,index:i});else{let h=-1;for(;(h=o.data.indexOf(A,h+1))!==-1;)c.push({type:7,index:i}),h+=A.length-1}i++}}static createElement(t,e){let s=O.createElement("template");return s.innerHTML=t,s}};function T(r,t,e=r,s){if(t===M)return t;let o=s!==void 0?e._$Co?.[s]:e._$Cl,i=B(t)?void 0:t._$litDirective$;return o?.constructor!==i&&(o?._$AO?.(!1),i===void 0?o=void 0:(o=new i(r),o._$AT(r,e,s)),s!==void 0?(e._$Co??=[])[s]=o:e._$Cl=o),o!==void 0&&(t=T(r,o._$AS(r,t.values),o,s)),t}var rt=class{constructor(t,e){this._$AV=[],this._$AN=void 0,this._$AD=t,this._$AM=e}get parentNode(){return this._$AM.parentNode}get _$AU(){return this._$AM._$AU}u(t){let{el:{content:e},parts:s}=this._$AD,o=(t?.creationScope??O).importNode(e,!0);P.currentNode=o;let i=P.nextNode(),n=0,l=0,c=s[0];for(;c!==void 0;){if(n===c.index){let a;c.type===2?a=new F(i,i.nextSibling,this,t):c.type===1?a=new c.ctor(i,c.name,c.strings,this,t):c.type===6&&(a=new ct(i,this,t)),this._$AV.push(a),c=s[++l]}n!==c?.index&&(i=P.nextNode(),n++)}return P.currentNode=O,o}p(t){let e=0;for(let s of this._$AV)s!==void 0&&(s.strings!==void 0?(s._$AI(t,s,e),e+=s.strings.length-2):s._$AI(t[e])),e++}},F=class r{get _$AU(){return this._$AM?._$AU??this._$Cv}constructor(t,e,s,o){this.type=2,this._$AH=_,this._$AN=void 0,this._$AA=t,this._$AB=e,this._$AM=s,this.options=o,this._$Cv=o?.isConnected??!0}get parentNode(){let t=this._$AA.parentNode,e=this._$AM;return e!==void 0&&t?.nodeType===11&&(t=e.parentNode),t}get startNode(){return this._$AA}get endNode(){return this._$AB}_$AI(t,e=this){t=T(this,t,e),B(t)?t===_||t==null||t===""?(this._$AH!==_&&this._$AR(),this._$AH=_):t!==this._$AH&&t!==M&&this._(t):t._$litType$!==void 0?this.$(t):t.nodeType!==void 0?this.T(t):Xt(t)?this.k(t):this._(t)}O(t){return this._$AA.parentNode.insertBefore(t,this._$AB)}T(t){this._$AH!==t&&(this._$AR(),this._$AH=this.O(t))}_(t){this._$AH!==_&&B(this._$AH)?this._$AA.nextSibling.data=t:this.T(O.createTextNode(t)),this._$AH=t}$(t){let{values:e,_$litType$:s}=t,o=typeof s=="number"?this._$AC(t):(s.el===void 0&&(s.el=D.createElement(Ht(s.h,s.h[0]),this.options)),s);if(this._$AH?._$AD===o)this._$AH.p(e);else{let i=new rt(o,this),n=i.u(this.options);i.p(e),this.T(n),this._$AH=i}}_$AC(t){let e=Mt.get(t.strings);return e===void 0&&Mt.set(t.strings,e=new D(t)),e}k(t){dt(this._$AH)||(this._$AH=[],this._$AR());let e=this._$AH,s,o=0;for(let i of t)o===e.length?e.push(s=new r(this.O(I()),this.O(I()),this,this.options)):s=e[o],s._$AI(i),o++;o<e.length&&(this._$AR(s&&s._$AB.nextSibling,o),e.length=o)}_$AR(t=this._$AA.nextSibling,e){for(this._$AP?.(!1,!0,e);t!==this._$AB;){let s=St(t).nextSibling;St(t).remove(),t=s}}setConnected(t){this._$AM===void 0&&(this._$Cv=t,this._$AP?.(t))}},R=class{get tagName(){return this.element.tagName}get _$AU(){return this._$AM._$AU}constructor(t,e,s,o,i){this.type=1,this._$AH=_,this._$AN=void 0,this.element=t,this.name=e,this._$AM=o,this.options=i,s.length>2||s[0]!==""||s[1]!==""?(this._$AH=Array(s.length-1).fill(new String),this.strings=s):this._$AH=_}_$AI(t,e=this,s,o){let i=this.strings,n=!1;if(i===void 0)t=T(this,t,e,0),n=!B(t)||t!==this._$AH&&t!==M,n&&(this._$AH=t);else{let l=t,c,a;for(t=i[0],c=0;c<i.length-1;c++)a=T(this,l[s+c],e,c),a===M&&(a=this._$AH[c]),n||=!B(a)||a!==this._$AH[c],a===_?t=_:t!==_&&(t+=(a??"")+i[c+1]),this._$AH[c]=a}n&&!o&&this.j(t)}j(t){t===_?this.element.removeAttribute(this.name):this.element.setAttribute(this.name,t??"")}},nt=class extends R{constructor(){super(...arguments),this.type=3}j(t){this.element[this.name]=t===_?void 0:t}},at=class extends R{constructor(){super(...arguments),this.type=4}j(t){this.element.toggleAttribute(this.name,!!t&&t!==_)}},lt=class extends R{constructor(t,e,s,o,i){super(t,e,s,o,i),this.type=5}_$AI(t,e=this){if((t=T(this,t,e,0)??_)===M)return;let s=this._$AH,o=t===_&&s!==_||t.capture!==s.capture||t.once!==s.once||t.passive!==s.passive,i=t!==_&&(s===_||o);o&&this.element.removeEventListener(this.name,this,s),i&&this.element.addEventListener(this.name,this,t),this._$AH=t}handleEvent(t){typeof this._$AH=="function"?this._$AH.call(this.options?.host??this.element,t):this._$AH.handleEvent(t)}},ct=class{constructor(t,e,s){this.element=t,this.type=6,this._$AN=void 0,this._$AM=e,this.options=s}get _$AU(){return this._$AM._$AU}_$AI(t){T(this,t)}};var ee=ht.litHtmlPolyfillSupport;ee?.(D,F),(ht.litHtmlVersions??=[]).push("3.3.3");var Lt=(r,t,e)=>{let s=e?.renderBefore??t,o=s._$litPart$;if(o===void 0){let i=e?.renderBefore??null;s._$litPart$=o=new F(t.insertBefore(I(),i),i,void 0,e??{})}return o._$AI(r),o};var ft=globalThis,w=class extends v{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0}createRenderRoot(){let t=super.createRenderRoot();return this.renderOptions.renderBefore??=t.firstChild,t}update(t){let e=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(t),this._$Do=Lt(e,this.renderRoot,this.renderOptions)}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(!0)}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(!1)}render(){return M}};w._$litElement$=!0,w.finalized=!0,ft.litElementHydrateSupport?.({LitElement:w});var se=ft.litElementPolyfillSupport;se?.({LitElement:w});(ft.litElementVersions??=[]).push("4.2.2");var Ut={name:"Card title",min_temp:"Min temperature (cold color)",max_temp:"Max temperature (hot color)",entity:"Temperature entity",label:"Label",pos_top:"Top position",pos_middle:"Middle position",pos_extra:"Extra position",pos_bottom:"Bottom position",layout:"Layout",layout_normal:"Standard",layout_compact:"Compact",default_title:"Buffer tank",label_top:"Flow",label_middle:"Storage",label_extra:"Extra",label_bottom:"Return",show_labels:"Show labels",show_chart:"Show history chart",chart_position:"Chart position",chart_above:"Above",chart_below:"Below",chart_hours:"History period",chart_style:"Chart style",chart_style_area:"Area",chart_style_line:"Lines only",chart_sensors:"Sensors to show in chart",icon:"Icon",icon_mode:"Icon position",icon_mode_beside:"Beside title",icon_mode_replace:"Replace title"};var qt={name:"Titolo della card",min_temp:"Temp. minima (colore freddo)",max_temp:"Temp. massima (colore caldo)",entity:"Entit\xE0 temperatura",label:"Etichetta",pos_top:"Posizione alta",pos_middle:"Posizione centrale",pos_extra:"Posizione extra",pos_bottom:"Posizione bassa",layout:"Layout",layout_normal:"Standard",layout_compact:"Compatto",default_title:"Puffer",label_top:"Mandata",label_middle:"Accumulo",label_extra:"Extra",label_bottom:"Ritorno",show_labels:"Mostra etichette",show_chart:"Mostra grafico storico",chart_position:"Posizione del grafico",chart_above:"Sopra",chart_below:"Sotto",chart_hours:"Periodo storico",chart_style:"Stile del grafico",chart_style_area:"Area",chart_style_line:"Solo linee",chart_sensors:"Sensori da mostrare nel grafico",icon:"Icona",icon_mode:"Posizione icona",icon_mode_beside:"Accanto al titolo",icon_mode_replace:"Sostituisce il titolo"};var ut="en",zt={en:Ut,it:qt};var re="1.4.0";function ne(r){let t=r&&(r.locale?.language||r.language)||ut,e=t.split("-")[0];return[...new Set([t,e,ut])]}function u(r,t){for(let e of ne(r)){let s=zt[e];if(s&&s[t]!=null)return s[t]}return t}var S=[{key:"top",labelKey:"label_top"},{key:"middle",labelKey:"label_middle"},{key:"extra",labelKey:"label_extra"},{key:"bottom",labelKey:"label_bottom"}],Z=["#e53935","#fb8c00","#1565c0","#00897b"];function ae(r){return r<=1?[.5]:r===2?[.3,.7]:r===3?[.12,.5,.88]:[.08,.36,.64,.92]}var It=(r,t,e={})=>{let s=new Event(t,{bubbles:!0,composed:!0,cancelable:!1});s.detail=e,r.dispatchEvent(s)};function le(r,t,e){let s=parseInt(r.slice(1),16),o=parseInt(t.slice(1),16),i=s>>16,n=s>>8&255,l=s&255,c=o>>16,a=o>>8&255,d=o&255;return`rgb(${Math.round(i+(c-i)*e)},${Math.round(n+(a-n)*e)},${Math.round(l+(d-l)*e)})`}var j=[[0,"#1565c0"],[.3,"#29b6f6"],[.55,"#ffca28"],[.78,"#fb8c00"],[1,"#e53935"]];function Y(r,t,e){if(r===null||isNaN(r))return"#9e9e9e";let s=Math.max(0,Math.min(1,(r-t)/(e-t)));for(let o=1;o<j.length;o++){let[i,n]=j[o-1],[l,c]=j[o];if(s<=l)return le(n,c,(s-i)/(l-i))}return j[j.length-1][1]}var ce=[2,6,12,24,48];async function he(r,t,e){let s=new Date,i=`/api/history/period/${new Date(s.getTime()-e*3600*1e3).toISOString()}?filter_entity_id=${t}&end_time=${s.toISOString()}&minimal_response=true`,n=await fetch(i,{headers:{Authorization:`Bearer ${r.auth.data.access_token}`}});return n.ok?((await n.json())[0]||[]).filter(a=>a.state!=="unavailable"&&a.state!=="unknown").map(a=>({t:new Date(a.last_changed||a.lu*1e3),v:Number(a.state)})).filter(a=>!isNaN(a.v)):[]}function de(r,t,e,s,o,i,n,l,c){if(r.length<2)return{line:"",area:""};let a=f=>i+(f-t)/(e-t)*l,d=f=>n+c-(f-s)/(o-s)*c,h=r.map(f=>[a(f.t),d(f.v)]),p;if(h.length<3)p=`M${h.map(f=>`${f[0].toFixed(1)},${f[1].toFixed(1)}`).join("L")}`;else{p=`M${h[0][0].toFixed(1)},${h[0][1].toFixed(1)}`;for(let f=0;f<h.length-1;f++){let H=h[f-1]||h[f],C=h[f],b=h[f+1],E=h[f+2]||b,G=C[0]+(b[0]-H[0])/6,Q=C[1]+(b[1]-H[1])/6,X=b[0]-(E[0]-C[0])/6,g=b[1]-(E[1]-C[1])/6;p+=`C${G.toFixed(1)},${Q.toFixed(1)} ${X.toFixed(1)},${g.toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)}`}}let m=h[h.length-1],$=`${p}L${m[0].toFixed(1)},${(n+c).toFixed(1)}L${i.toFixed(1)},${(n+c).toFixed(1)}Z`;return{line:p,area:$}}function pe(r,t,e,s){if(r.length<=s)return r;let i=(e-t||1)/s,n=new Array(s).fill(null).map(()=>[]);for(let c of r){let a=Math.floor((c.t-t)/i);a<0&&(a=0),a>=s&&(a=s-1),n[a].push(c.v)}let l=[];return n.forEach((c,a)=>{if(c.length===0)return;let d=c.reduce((h,p)=>h+p,0)/c.length;l.push({t:t+(a+.5)*i,v:d})}),l}function fe(r,t,e,s,o){let n=o?70:120,l={top:8,right:8,bottom:o?6:20,left:o?6:36},c=380-l.left-l.right,a=n-l.top-l.bottom,d=l.left,h=l.top,p=r.flat();if(p.length===0)return x`<svg viewBox="0 0 ${380} ${n}" width="100%"></svg>`;let m=Math.min(...p.map(g=>g.t)),$=Math.max(...p.map(g=>g.t)),f=Math.max(20,Math.round(c/4)),H=r.map(g=>pe(g.map(N=>({t:N.t.getTime(),v:N.v})),m,$,f)),C=H.flat().map(g=>g.v),b=Math.min(...C),E=Math.max(...C),G=(E-b)*.1||2;b-=G,E+=G;let Q=o?[]:[0,.33,.66,1].map(g=>{let N=b+g*(E-b),L=h+a-g*a;return x`
+          <line x1="${d}" y1="${L.toFixed(1)}" x2="${(d+c).toFixed(1)}" y2="${L.toFixed(1)}"
                 stroke="var(--divider-color,#e0e0e0)" stroke-width="1"></line>
-          <text x="${(x0 - 4).toFixed(1)}" y="${(cy + 4).toFixed(1)}"
-                text-anchor="end" class="chart-tick">${Math.round(v)}</text>`;
-      })
-    : [];
-
-  // Series paths
-  const paths = smoothed.map((series, i) => {
-    if (series.length < 2) return "";
-    const { line, area } = buildPath(series, tMin, tMax, vMin, vMax, x0, y0, cW, cH);
-    const col = colors[i];
-    return svg`
-      ${style === "area"
-        ? svg`<path d="${area}" fill="${col}" fill-opacity="0.12" stroke="none"></path>`
-        : ""}
-      <path d="${line}" fill="none" stroke="${col}" stroke-width="2"
-            stroke-linejoin="round" stroke-linecap="round"></path>`;
-  });
-
-  return svg`
-    <svg viewBox="0 0 ${W} ${H}" width="100%" class="chart-svg">
-      <rect width="${W}" height="${H}" fill="transparent"></rect>
-      ${yTicks}
-      ${paths}
-    </svg>`;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Card                                                                      */
-/* -------------------------------------------------------------------------- */
-
-class PufferCard extends LitElement {
-  static get properties() {
-    return {
-      hass:        { attribute: false },
-      _config:     { state: true },
-      _history:    { state: true }, // Map<entityId, [{t,v}]>
-      // _histLoading is NOT a reactive property: we manage re-renders manually
-      // so that periodic silent refreshes never cause a visible blank flash.
-    };
-  }
-
-  static getConfigElement() {
-    return document.createElement("puffer-card-editor");
-  }
-
-  static async getStubConfig(hass) {
-    await Promise.all(langCandidates(hass).map(loadLanguage));
-    const temps = hass
-      ? Object.keys(hass.states).filter(
-          (e) => e.startsWith("sensor.") &&
-                 hass.states[e].attributes.device_class === "temperature"
-        )
-      : [];
-    return {
-      type: "custom:puffer-card",
-      name: localize(hass, "default_title"),
-      icon: "mdi:propane-tank-outline",
-      icon_mode: "beside",
-      layout: "normal",
-      show_labels: true,
-      min_temp: 20,
-      max_temp: 80,
-      top:    { entity: temps[0] || "", label: localize(hass, "label_top")    },
-      middle: { entity: temps[1] || "", label: localize(hass, "label_middle") },
-      extra:  { entity: temps[3] || "", label: localize(hass, "label_extra")  },
-      bottom: { entity: temps[2] || "", label: localize(hass, "label_bottom") },
-    };
-  }
-
-  setConfig(config) {
-    if (!config) throw new Error("Invalid configuration");
-    const prev = this._config;
-    const merged = {
-      min_temp: 20, max_temp: 80, layout: "normal", show_labels: true,
-      icon: "", icon_mode: "beside",
-      show_chart: false, chart_hours: 24, chart_position: "below",
-      chart_style: "area",
-      ...config,
-    };
-    // Always materialize chart_sensors explicitly (instead of relying on a
-    // runtime fallback) so the multi-select in the editor and the chart
-    // rendering never disagree about which sensors are selected.
-    if (!Array.isArray(merged.chart_sensors) || merged.chart_sensors.length === 0) {
-      merged.chart_sensors = POSITIONS
-        .map((p) => p.key)
-        .filter((k) => merged[k]?.entity);
-    }
-    this._config = merged;
-    // If chart-relevant options changed while the card is already mounted,
-    // reset the history cache and restart the polling interval so fresh data
-    // is fetched immediately with the new settings.
-    const chartParamsChanged = prev && this._config.show_chart && (
-      prev.show_chart     !== this._config.show_chart     ||
-      prev.chart_hours    !== this._config.chart_hours    ||
-      prev.top?.entity    !== this._config.top?.entity    ||
-      prev.middle?.entity !== this._config.middle?.entity ||
-      prev.extra?.entity  !== this._config.extra?.entity  ||
-      prev.bottom?.entity !== this._config.bottom?.entity ||
-      JSON.stringify(prev.chart_sensors) !== JSON.stringify(this._config.chart_sensors)
-    );
-    if (chartParamsChanged) {
-      this._history = new Map();
-      if (this.isConnected) this._startPolling();
-    }
-  }
-
-  getCardSize() {
-    let size = this._config?.layout === "compact" ? 2 : 5;
-    if (this._config?.show_chart) size += 2;
-    return size;
-  }
-
-  /* ---- i18n ------------------------------------------------------------- */
-
-  _loadI18n() {
-    this._reqLangs = this._reqLangs || new Set();
-    langCandidates(this.hass).forEach((l) => {
-      if (this._reqLangs.has(l)) return;
-      this._reqLangs.add(l);
-      loadLanguage(l).then(() => this.requestUpdate());
-    });
-  }
-
-  /* ---- history ---------------------------------------------------------- */
-
-  /**
-   * Fetch history for all configured sensors.
-   * Guards against concurrent calls (_fetching flag) and catches any network
-   * or API errors so _histLoading never gets stuck at true.
-   */
-  async _fetchHistory() {
-    if (!this.hass || !this._config?.show_chart) return;
-    if (this._fetching) return; // prevent parallel calls
-    this._fetching = true;
-    // Show the loading placeholder only on the very first fetch (no data yet).
-    const firstLoad = !this._history?.size;
-    if (firstLoad) {
-      this._histLoading = true;
-      this.requestUpdate();
-    }
-    try {
-      const hours   = Number(this._config.chart_hours) || 24;
-      const data    = this._data();
-      const wanted  = this._config.chart_sensors || POSITIONS.map((p) => p.key);
-      const toFetch = data.filter((p) => wanted.includes(p.key) && p.cfg?.entity);
-      const results = await Promise.all(
-        toFetch.map((p) => fetchHistory(this.hass, p.cfg.entity, hours))
-      );
-      const map = new Map();
-      toFetch.forEach((p, i) => map.set(p.key, results[i]));
-      // Assign the new history and trigger a single re-render.
-      this._history = map;
-      this.requestUpdate();
-    } catch (err) {
-      console.warn("[puffer-card] history fetch failed:", err);
-    } finally {
-      this._histLoading = false;
-      this._fetching = false;
-    }
-  }
-
-  /** Start the 60-second polling interval when the card is attached to the DOM. */
-  connectedCallback() {
-    super.connectedCallback();
-    if (this._config?.show_chart) this._startPolling();
-  }
-
-  /** Clear the polling interval when the card is removed from the DOM. */
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    this._stopPolling();
-  }
-
-  _startPolling() {
-    this._stopPolling(); // always clear any existing interval first
-    this._fetchHistory();
-    this._pollInterval = setInterval(() => this._fetchHistory(), 60_000);
-  }
-
-  _stopPolling() {
-    if (this._pollInterval) {
-      clearInterval(this._pollInterval);
-      this._pollInterval = null;
-    }
-  }
-
-  /** Re-start polling when show_chart is toggled on; stop it when toggled off. */
-  updated(changed) {
-    if (!changed.has("_config")) return;
-    const prev = changed.get("_config");
-    if (this._config?.show_chart && !prev?.show_chart) {
-      this._startPolling();
-    } else if (!this._config?.show_chart && prev?.show_chart) {
-      this._stopPolling();
-    }
-  }
-
-  /* ---- data ------------------------------------------------------------- */
-
-  _stateOf(cfg) {
-    if (!cfg || !cfg.entity || !this.hass) return null;
-    return this.hass.states[cfg.entity] || null;
-  }
-
-  _data() {
-    const present = POSITIONS.map((p) => {
-      const cfg = this._config[p.key];
-      if (!cfg || !cfg.entity) return null;
-      const st        = this._stateOf(cfg);
-      const raw       = st ? Number(st.state) : NaN;
-      const available = st && st.state !== "unavailable" && st.state !== "unknown";
-      const unit      = (st?.attributes?.unit_of_measurement) || this._config.unit || "°C";
-      const label     = (cfg.label && cfg.label.toString()) || localize(this.hass, p.labelKey);
-      return { ...p, cfg, unit, label, available, temp: available && !isNaN(raw) ? raw : null };
-    }).filter(Boolean);
-
-    const offs = evenOffsets(present.length);
-    return present.map((p, i) => ({ ...p, off: offs[i] }));
-  }
-
-  _format(t) {
-    const r = Math.round(t * 10) / 10;
-    return Number.isInteger(r) ? String(r) : r.toFixed(1);
-  }
-
-  _moreInfo(entityId) {
-    if (!entityId) return;
-    fireEvent(this, "hass-more-info", { entityId });
-  }
-
-  _gradient(data, min, max) {
-    let stops = data
-      .filter((p) => p.temp !== null)
-      .map((p) => ({ off: p.off, color: tempColor(p.temp, min, max) }))
-      .sort((a, b) => a.off - b.off);
-    if (stops.length === 0) {
-      stops = [{ off: 0, color: "#1565c0" }, { off: 1, color: "#e53935" }];
-    } else {
-      if (stops[0].off > 0) stops = [{ off: 0, color: stops[0].color }, ...stops];
-      const last = stops[stops.length - 1];
-      if (last.off < 1) stops = [...stops, { off: 1, color: last.color }];
-    }
-    return { stops, bottomColor: stops[stops.length - 1].color };
-  }
-
-  /* ---- chart ------------------------------------------------------------ */
-
-  /**
-   * Whether to use fixed chart colors for the dots instead of temp-ramp colors.
-   * Activates only when the chart is shown and more than one series is displayed.
-   */
-  _useChartColors(data) {
-    if (!this._config.show_chart) return false;
-    const wanted  = this._config.chart_sensors || POSITIONS.map((p) => p.key);
-    const visible = data.filter((p) => wanted.includes(p.key));
-    return visible.length > 1;
-  }
-
-  _dotColor(p, data, min, max) {
-    if (this._useChartColors(data)) {
-      const wanted = this._config.chart_sensors || POSITIONS.map((p) => p.key);
-      const idx    = data.filter((d) => wanted.includes(d.key)).findIndex((d) => d.key === p.key);
-      return idx >= 0 ? CHART_COLORS[idx % CHART_COLORS.length] : tempColor(p.temp, min, max);
-    }
-    return tempColor(p.temp, min, max);
-  }
-
-  _renderChart(data, compact = false) {
-    const wanted   = this._config.chart_sensors || POSITIONS.map((p) => p.key);
-    const series   = data.filter((p) => wanted.includes(p.key));
-    const colors   = series.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
-    const labels   = series.map((p) => p.label);
-    const history  = series.map((p) => (this._history?.get(p.key) || []));
-    const style    = this._config.chart_style || "area";
-    return html`
-      <div class="chart-wrap ${compact ? "chart-compact" : ""}">
-        ${this._histLoading && !this._history?.size
-          ? html`<div class="chart-loading">…</div>`
-          : renderChart(history, labels, colors, style, compact)}
-      </div>`;
-  }
-
-  /* ---- render: shared defs --------------------------------------------- */
-
-  _defs(stops, gradId) {
-    return svg`
+          <text x="${(d-4).toFixed(1)}" y="${(L+4).toFixed(1)}"
+                text-anchor="end" class="chart-tick">${Math.round(N)}</text>`}),X=H.map((g,N)=>{if(g.length<2)return"";let{line:L,area:Bt}=de(g,m,$,b,E,d,h,c,a),gt=e[N];return x`
+      ${s==="area"?x`<path d="${Bt}" fill="${gt}" fill-opacity="0.12" stroke="none"></path>`:""}
+      <path d="${L}" fill="none" stroke="${gt}" stroke-width="2"
+            stroke-linejoin="round" stroke-linecap="round"></path>`});return x`
+    <svg viewBox="0 0 ${380} ${n}" width="100%" class="chart-svg">
+      <rect width="${380}" height="${n}" fill="transparent"></rect>
+      ${Q}
+      ${X}
+    </svg>`}var _t=class extends w{static get properties(){return{hass:{attribute:!1},_config:{state:!0},_history:{state:!0}}}static getConfigElement(){return document.createElement("puffer-card-editor")}static async getStubConfig(t){let e=t?Object.keys(t.states).filter(s=>s.startsWith("sensor.")&&t.states[s].attributes.device_class==="temperature"):[];return{type:"custom:puffer-card",name:u(t,"default_title"),icon:"mdi:propane-tank-outline",icon_mode:"beside",layout:"normal",show_labels:!0,min_temp:20,max_temp:80,top:{entity:e[0]||"",label:u(t,"label_top")},middle:{entity:e[1]||"",label:u(t,"label_middle")},extra:{entity:e[3]||"",label:u(t,"label_extra")},bottom:{entity:e[2]||"",label:u(t,"label_bottom")}}}setConfig(t){if(!t)throw new Error("Invalid configuration");let e=this._config,s={min_temp:20,max_temp:80,layout:"normal",show_labels:!0,icon:"",icon_mode:"beside",show_chart:!1,chart_hours:24,chart_position:"below",chart_style:"area",...t};(!Array.isArray(s.chart_sensors)||s.chart_sensors.length===0)&&(s.chart_sensors=S.map(i=>i.key).filter(i=>s[i]?.entity)),this._config=s,e&&this._config.show_chart&&(e.show_chart!==this._config.show_chart||e.chart_hours!==this._config.chart_hours||e.top?.entity!==this._config.top?.entity||e.middle?.entity!==this._config.middle?.entity||e.extra?.entity!==this._config.extra?.entity||e.bottom?.entity!==this._config.bottom?.entity||JSON.stringify(e.chart_sensors)!==JSON.stringify(this._config.chart_sensors))&&(this._history=new Map,this.isConnected&&this._startPolling())}getCardSize(){let t=this._config?.layout==="compact"?2:5;return this._config?.show_chart&&(t+=2),t}async _fetchHistory(){if(!this.hass||!this._config?.show_chart||this._fetching)return;this._fetching=!0,!this._history?.size&&(this._histLoading=!0,this.requestUpdate());try{let e=Number(this._config.chart_hours)||24,s=this._data(),o=this._config.chart_sensors||S.map(c=>c.key),i=s.filter(c=>o.includes(c.key)&&c.cfg?.entity),n=await Promise.all(i.map(c=>he(this.hass,c.cfg.entity,e))),l=new Map;i.forEach((c,a)=>l.set(c.key,n[a])),this._history=l,this.requestUpdate()}catch(e){console.warn("[puffer-card] history fetch failed:",e)}finally{this._histLoading=!1,this._fetching=!1}}connectedCallback(){super.connectedCallback(),this._config?.show_chart&&this._startPolling()}disconnectedCallback(){super.disconnectedCallback(),this._stopPolling()}_startPolling(){this._stopPolling(),this._fetchHistory(),this._pollInterval=setInterval(()=>this._fetchHistory(),6e4)}_stopPolling(){this._pollInterval&&(clearInterval(this._pollInterval),this._pollInterval=null)}updated(t){if(!t.has("_config"))return;let e=t.get("_config");this._config?.show_chart&&!e?.show_chart?this._startPolling():!this._config?.show_chart&&e?.show_chart&&this._stopPolling()}_stateOf(t){return!t||!t.entity||!this.hass?null:this.hass.states[t.entity]||null}_data(){let t=S.map(s=>{let o=this._config[s.key];if(!o||!o.entity)return null;let i=this._stateOf(o),n=i?Number(i.state):NaN,l=i&&i.state!=="unavailable"&&i.state!=="unknown",c=i?.attributes?.unit_of_measurement||this._config.unit||"\xB0C",a=o.label&&o.label.toString()||u(this.hass,s.labelKey);return{...s,cfg:o,unit:c,label:a,available:l,temp:l&&!isNaN(n)?n:null}}).filter(Boolean),e=ae(t.length);return t.map((s,o)=>({...s,off:e[o]}))}_format(t){let e=Math.round(t*10)/10;return Number.isInteger(e)?String(e):e.toFixed(1)}_moreInfo(t){t&&It(this,"hass-more-info",{entityId:t})}_gradient(t,e,s){let o=t.filter(i=>i.temp!==null).map(i=>({off:i.off,color:Y(i.temp,e,s)})).sort((i,n)=>i.off-n.off);if(o.length===0)o=[{off:0,color:"#1565c0"},{off:1,color:"#e53935"}];else{o[0].off>0&&(o=[{off:0,color:o[0].color},...o]);let i=o[o.length-1];i.off<1&&(o=[...o,{off:1,color:i.color}])}return{stops:o,bottomColor:o[o.length-1].color}}_useChartColors(t){if(!this._config.show_chart)return!1;let e=this._config.chart_sensors||S.map(o=>o.key);return t.filter(o=>e.includes(o.key)).length>1}_dotColor(t,e,s,o){if(this._useChartColors(e)){let i=this._config.chart_sensors||S.map(l=>l.key),n=e.filter(l=>i.includes(l.key)).findIndex(l=>l.key===t.key);return n>=0?Z[n%Z.length]:Y(t.temp,s,o)}return Y(t.temp,s,o)}_renderChart(t,e=!1){let s=this._config.chart_sensors||S.map(a=>a.key),o=t.filter(a=>s.includes(a.key)),i=o.map((a,d)=>Z[d%Z.length]),n=o.map(a=>a.label),l=o.map(a=>this._history?.get(a.key)||[]),c=this._config.chart_style||"area";return y`
+      <div class="chart-wrap ${e?"chart-compact":""}">
+        ${this._histLoading&&!this._history?.size?y`<div class="chart-loading">…</div>`:fe(l,n,i,c,e)}
+      </div>`}_defs(t,e){return x`
       <defs>
-        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
-          ${stops.map((s) => svg`<stop offset="${s.off * 100}%" stop-color="${s.color}"></stop>`)}
+        <linearGradient id="${e}" x1="0" y1="0" x2="0" y2="1">
+          ${t.map(s=>x`<stop offset="${s.off*100}%" stop-color="${s.color}"></stop>`)}
         </linearGradient>
         <linearGradient id="lidGrad" x1="0" y1="0" x2="1" y2="0">
           <stop offset="0%" stop-color="#cfd8dc"></stop>
@@ -577,119 +37,49 @@ class PufferCard extends LitElement {
           <feDropShadow dx="0" dy="3" stdDeviation="4"
                         flood-color="rgba(0,0,0,0.25)"></feDropShadow>
         </filter>
-      </defs>`;
-  }
-
-  /* ---- render: normal layout ------------------------------------------- */
-
-  /**
-   * Geometry/typography metrics for the normal-layout tank, based on how
-   * many sensors are configured. 1-3 sensors keep the exact original
-   * pixel layout (full backward compatibility for existing installs);
-   * 4 sensors get a taller tank and smaller badge fonts so nothing overlaps.
-   */
-  _metrics(n) {
-    const quad     = n === 4;
-    const liquidTop = 48;
-    const liquidH   = quad ? 252 : 204;
-    const liquidBot = liquidTop + liquidH;
-    const viewH     = quad ? 360 : 300;
-    return quad
-      ? {
-          quad, liquidTop, liquidH, liquidBot, viewH,
-          badgeRectYOff: 22, dotCyLabelOff: 8, labelYOff: 4,
-          valueYOffLabel: 14, valueYOffNoLabel: 7,
-          fontLabel: 9, fontValue: 17, fontUnit: 10, unitDx: 2,
-        }
-      : {
-          quad, liquidTop, liquidH, liquidBot, viewH,
-          badgeRectYOff: 25, dotCyLabelOff: 9, labelYOff: 5,
-          valueYOffLabel: 16, valueYOffNoLabel: 8,
-          fontLabel: 10, fontValue: 21, fontUnit: 11, unitDx: 3,
-        };
-  }
-
-  _y(off, m) {
-    return m.liquidTop + off * m.liquidH;
-  }
-
-  _badge(p, min, max, showLabels, dotColor, m) {
-    const y      = this._y(p.off, m);
-    const val    = p.temp === null ? "—" : this._format(p.temp);
-    const dotCy  = showLabels ? y - m.dotCyLabelOff : y;
-    const valueY = showLabels ? y + m.valueYOffLabel : y + m.valueYOffNoLabel;
-    return svg`
-      <g class="badge" @click=${() => this._moreInfo(p.cfg.entity)}>
-        <line x1="46" y1="${y}" x2="174" y2="${y}"
+      </defs>`}_metrics(t){let e=t===4,s=48,o=e?252:204,i=s+o,n=e?360:300;return e?{quad:e,liquidTop:s,liquidH:o,liquidBot:i,viewH:n,badgeRectYOff:22,dotCyLabelOff:8,labelYOff:4,valueYOffLabel:14,valueYOffNoLabel:7,fontLabel:9,fontValue:17,fontUnit:10,unitDx:2}:{quad:e,liquidTop:s,liquidH:o,liquidBot:i,viewH:n,badgeRectYOff:25,dotCyLabelOff:9,labelYOff:5,valueYOffLabel:16,valueYOffNoLabel:8,fontLabel:10,fontValue:21,fontUnit:11,unitDx:3}}_y(t,e){return e.liquidTop+t*e.liquidH}_badge(t,e,s,o,i,n){let l=this._y(t.off,n),c=t.temp===null?"\u2014":this._format(t.temp),a=o?l-n.dotCyLabelOff:l,d=o?l+n.valueYOffLabel:l+n.valueYOffNoLabel;return x`
+      <g class="badge" @click=${()=>this._moreInfo(t.cfg.entity)}>
+        <line x1="46" y1="${l}" x2="174" y2="${l}"
               stroke="rgba(255,255,255,0.55)" stroke-width="1.5"
               stroke-dasharray="4 4"></line>
-        <line x1="180" y1="${y}" x2="212" y2="${y}"
+        <line x1="180" y1="${l}" x2="212" y2="${l}"
               stroke="var(--divider-color, #cfd8dc)" stroke-width="2"></line>
-        <circle cx="180" cy="${y}" r="4.5" fill="${dotColor}"></circle>
-        <rect x="212" y="${y - m.badgeRectYOff}" width="156" height="${m.badgeRectYOff * 2}" rx="13"
+        <circle cx="180" cy="${l}" r="4.5" fill="${i}"></circle>
+        <rect x="212" y="${l-n.badgeRectYOff}" width="156" height="${n.badgeRectYOff*2}" rx="13"
               fill="var(--card-background-color, #fff)"
               stroke="var(--divider-color, #cfd8dc)" stroke-width="1"></rect>
-        <circle cx="226" cy="${dotCy}" r="4" fill="${dotColor}"></circle>
-        ${showLabels
-          ? svg`<text x="237" y="${y - m.labelYOff}" class="lbl" style="font-size:${m.fontLabel}px">${p.label}</text>`
-          : ""}
-        <text x="${showLabels ? 226 : 240}" y="${valueY}" class="val" style="font-size:${m.fontValue}px"
-              fill="${tempColor(p.temp, min, max)}">${val}<tspan class="unit" dx="${m.unitDx}" style="font-size:${m.fontUnit}px">${p.unit}</tspan></text>
-      </g>`;
-  }
-
-  _renderNormal(data, min, max, showLabels) {
-    const { stops, bottomColor } = this._gradient(data, min, max);
-    const useChart   = this._config.show_chart;
-    const chartAbove = this._config.chart_position === "above";
-    const m = this._metrics(data.length);
-    // One side pipe per configured sensor, centered on its height, instead
-    // of a fixed pair of decorative pipes unrelated to how many sensors exist.
-    const sidePipes = data.map((p) => {
-      const yy = this._y(p.off, m);
-      return svg`<rect x="176" y="${yy - 5.5}" width="34" height="11" rx="3" fill="#9fb0b8"></rect>`;
-    });
-    // Insulation bands are purely decorative; keep them proportionally
-    // placed at ~35% / ~65% of the liquid area regardless of tank height.
-    const bandY1 = m.liquidTop + m.liquidH * 0.35;
-    const bandY2 = m.liquidTop + m.liquidH * 0.65;
-    const tank = html`
-      <svg viewBox="0 0 380 ${m.viewH}" width="100%" preserveAspectRatio="xMidYMid meet">
-        ${this._defs(stops, "liquidGrad")}
+        <circle cx="226" cy="${a}" r="4" fill="${i}"></circle>
+        ${o?x`<text x="237" y="${l-n.labelYOff}" class="lbl" style="font-size:${n.fontLabel}px">${t.label}</text>`:""}
+        <text x="${o?226:240}" y="${d}" class="val" style="font-size:${n.fontValue}px"
+              fill="${Y(t.temp,e,s)}">${c}<tspan class="unit" dx="${n.unitDx}" style="font-size:${n.fontUnit}px">${t.unit}</tspan></text>
+      </g>`}_renderNormal(t,e,s,o){let{stops:i,bottomColor:n}=this._gradient(t,e,s),l=this._config.show_chart,c=this._config.chart_position==="above",a=this._metrics(t.length),d=t.map($=>{let f=this._y($.off,a);return x`<rect x="176" y="${f-5.5}" width="34" height="11" rx="3" fill="#9fb0b8"></rect>`}),h=a.liquidTop+a.liquidH*.35,p=a.liquidTop+a.liquidH*.65,m=y`
+      <svg viewBox="0 0 380 ${a.viewH}" width="100%" preserveAspectRatio="xMidYMid meet">
+        ${this._defs(i,"liquidGrad")}
         <rect x="101" y="18" width="18" height="34" rx="3" fill="#9fb0b8"></rect>
-        <rect x="101" y="${m.liquidBot}" width="18" height="28" rx="3" fill="#9fb0b8"></rect>
-        ${sidePipes}
+        <rect x="101" y="${a.liquidBot}" width="18" height="28" rx="3" fill="#9fb0b8"></rect>
+        ${d}
         <g filter="url(#ds)">
-          <ellipse cx="110" cy="${m.liquidBot}" rx="70" ry="15" fill="${bottomColor}"></ellipse>
-          <rect x="40" y="${m.liquidTop}" width="140" height="${m.liquidH}" fill="url(#liquidGrad)"></rect>
-          <rect x="40" y="${m.liquidTop}" width="140" height="${m.liquidH}" fill="url(#sheen)"></rect>
-          <path d="M40,${m.liquidBot} A70,15 0 0 0 180,${m.liquidBot}"
+          <ellipse cx="110" cy="${a.liquidBot}" rx="70" ry="15" fill="${n}"></ellipse>
+          <rect x="40" y="${a.liquidTop}" width="140" height="${a.liquidH}" fill="url(#liquidGrad)"></rect>
+          <rect x="40" y="${a.liquidTop}" width="140" height="${a.liquidH}" fill="url(#sheen)"></rect>
+          <path d="M40,${a.liquidBot} A70,15 0 0 0 180,${a.liquidBot}"
                 fill="none" stroke="rgba(0,0,0,0.25)" stroke-width="2"></path>
-          <line x1="40"  y1="${m.liquidTop}" x2="40"  y2="${m.liquidBot}" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
-          <line x1="180" y1="${m.liquidTop}" x2="180" y2="${m.liquidBot}" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
-          <line x1="42" y1="${bandY1}" x2="178" y2="${bandY1}" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
-          <line x1="42" y1="${bandY2}" x2="178" y2="${bandY2}" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
-          <ellipse cx="110" cy="${m.liquidTop}" rx="70" ry="15" fill="url(#lidGrad)"
+          <line x1="40"  y1="${a.liquidTop}" x2="40"  y2="${a.liquidBot}" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
+          <line x1="180" y1="${a.liquidTop}" x2="180" y2="${a.liquidBot}" stroke="rgba(0,0,0,0.18)" stroke-width="2"></line>
+          <line x1="42" y1="${h}" x2="178" y2="${h}" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
+          <line x1="42" y1="${p}" x2="178" y2="${p}" stroke="rgba(255,255,255,0.18)" stroke-width="3"></line>
+          <ellipse cx="110" cy="${a.liquidTop}" rx="70" ry="15" fill="url(#lidGrad)"
                    stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></ellipse>
         </g>
-        ${data.map((p) => this._badge(p, min, max, showLabels, this._dotColor(p, data, min, max), m))}
-      </svg>`;
-    return html`
-      ${useChart && chartAbove  ? this._renderChart(data, false) : ""}
-      ${tank}
-      ${useChart && !chartAbove ? this._renderChart(data, false) : ""}`;
-  }
-
-  /* ---- render: compact layout ------------------------------------------ */
-
-  _miniTank(data, min, max) {
-    const { stops, bottomColor } = this._gradient(data, min, max);
-    const y = (off) => 14 + off * 96;
-    return svg`
+        ${t.map($=>this._badge($,e,s,o,this._dotColor($,t,e,s),a))}
+      </svg>`;return y`
+      ${l&&c?this._renderChart(t,!1):""}
+      ${m}
+      ${l&&!c?this._renderChart(t,!1):""}`}_miniTank(t,e,s){let{stops:o,bottomColor:i}=this._gradient(t,e,s),n=l=>14+l*96;return x`
       <svg viewBox="0 0 84 124" width="64" preserveAspectRatio="xMidYMid meet">
-        ${this._defs(stops, "liquidGrad")}
+        ${this._defs(o,"liquidGrad")}
         <g filter="url(#ds)">
-          <ellipse cx="42" cy="110" rx="26" ry="7" fill="${bottomColor}"></ellipse>
+          <ellipse cx="42" cy="110" rx="26" ry="7" fill="${i}"></ellipse>
           <rect x="16" y="14" width="52" height="96" fill="url(#liquidGrad)"></rect>
           <rect x="16" y="14" width="52" height="96" fill="url(#sheen)"></rect>
           <line x1="16" y1="14"  x2="16" y2="110" stroke="rgba(0,0,0,0.18)" stroke-width="1.5"></line>
@@ -699,77 +89,36 @@ class PufferCard extends LitElement {
           <ellipse cx="42" cy="14" rx="26" ry="7" fill="url(#lidGrad)"
                    stroke="rgba(0,0,0,0.18)" stroke-width="1"></ellipse>
         </g>
-        ${data.map((p) => svg`
-          <circle cx="68" cy="${y(p.off)}" r="3.5"
-                  fill="${this._dotColor(p, data, min, max)}"
+        ${t.map(l=>x`
+          <circle cx="68" cy="${n(l.off)}" r="3.5"
+                  fill="${this._dotColor(l,t,e,s)}"
                   stroke="#fff" stroke-width="1"></circle>`)}
-      </svg>`;
-  }
-
-  _renderCompact(data, min, max, showLabels) {
-    const useChart   = this._config.show_chart;
-    const chartAbove = this._config.chart_position === "above";
-    const quad       = data.length === 4;
-    const body = html`
-      <div class="compact ${quad ? "is-quad" : ""}">
-        <div class="mini">${this._miniTank(data, min, max)}</div>
+      </svg>`}_renderCompact(t,e,s,o){let i=this._config.show_chart,n=this._config.chart_position==="above",l=t.length===4,c=y`
+      <div class="compact ${l?"is-quad":""}">
+        <div class="mini">${this._miniTank(t,e,s)}</div>
         <div class="rows">
-          ${data.map((p) => {
-            const color = tempColor(p.temp, min, max);
-            const dot   = this._dotColor(p, data, min, max);
-            const val   = p.temp === null ? "—" : this._format(p.temp);
-            return html`
-              <div class="row ${showLabels ? "" : "no-labels"}"
-                   @click=${() => this._moreInfo(p.cfg.entity)}>
-                ${showLabels
-                  ? html`<span class="dot" style="background:${dot}"></span>
-                         <span class="rlabel">${p.label}</span>`
-                  : ""}
-                <span class="rval" style="color:${color}">${val}<span class="runit">${p.unit}</span></span>
-              </div>`;
-          })}
+          ${t.map(a=>{let d=Y(a.temp,e,s),h=this._dotColor(a,t,e,s),p=a.temp===null?"\u2014":this._format(a.temp);return y`
+              <div class="row ${o?"":"no-labels"}"
+                   @click=${()=>this._moreInfo(a.cfg.entity)}>
+                ${o?y`<span class="dot" style="background:${h}"></span>
+                         <span class="rlabel">${a.label}</span>`:""}
+                <span class="rval" style="color:${d}">${p}<span class="runit">${a.unit}</span></span>
+              </div>`})}
         </div>
-      </div>`;
-    return html`
-      ${useChart && chartAbove  ? this._renderChart(data, true) : ""}
-      ${body}
-      ${useChart && !chartAbove ? this._renderChart(data, true) : ""}`;
-  }
-
-  /* ---- render ----------------------------------------------------------- */
-
-  render() {
-    if (!this._config) return html``;
-    this._loadI18n();
-
-    const min        = Number(this._config.min_temp);
-    const max        = Number(this._config.max_temp) > min ? Number(this._config.max_temp) : min + 1;
-    const data       = this._data();
-    const compact    = this._config.layout === "compact";
-    const showLabels = this._config.show_labels !== false;
-
-    const hasIcon  = !!this._config.icon;
-    const replaceTitle = hasIcon && this._config.icon_mode === "replace";
-
-    return html`
-      <ha-card class=${compact ? "is-compact" : ""}>
-        ${this._config.name || hasIcon
-          ? html`
+      </div>`;return y`
+      ${i&&n?this._renderChart(t,!0):""}
+      ${c}
+      ${i&&!n?this._renderChart(t,!0):""}`}render(){if(!this._config)return y``;let t=Number(this._config.min_temp),e=Number(this._config.max_temp)>t?Number(this._config.max_temp):t+1,s=this._data(),o=this._config.layout==="compact",i=this._config.show_labels!==!1,n=!!this._config.icon,l=n&&this._config.icon_mode==="replace";return y`
+      <ha-card class=${o?"is-compact":""}>
+        ${this._config.name||n?y`
               <div class="title">
-                ${hasIcon ? html`<ha-icon class="title-icon" icon=${this._config.icon}></ha-icon>` : ""}
-                ${replaceTitle ? "" : this._config.name}
-              </div>`
-          : ""}
+                ${n?y`<ha-icon class="title-icon" icon=${this._config.icon}></ha-icon>`:""}
+                ${l?"":this._config.name}
+              </div>`:""}
         <div class="container">
-          ${compact
-            ? this._renderCompact(data, min, max, showLabels)
-            : this._renderNormal(data, min, max, showLabels)}
+          ${o?this._renderCompact(s,t,e,i):this._renderNormal(s,t,e,i)}
         </div>
-      </ha-card>`;
-  }
-
-  static get styles() {
-    return css`
+      </ha-card>`}static get styles(){return et`
       ha-card { padding: 12px 12px 8px; overflow: hidden; }
       ha-card.is-compact { padding: 10px 14px; }
       .title { display: flex; align-items: center; gap: 8px; font-size: 1.15rem; font-weight: 600;
@@ -816,166 +165,32 @@ class PufferCard extends LitElement {
                     font-family: var(--paper-font-body1_-_font-family, sans-serif); }
       .chart-loading { height: 70px; display: flex; align-items: center;
                        justify-content: center; color: var(--secondary-text-color); font-size: 0.85rem; }
-    `;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Editor                                                                    */
-/* -------------------------------------------------------------------------- */
-
-class PufferCardEditor extends LitElement {
-  static get properties() {
-    return { hass: { attribute: false }, _config: { state: true } };
-  }
-
-  setConfig(config) {
-    // Mirror the same defaulting/materialization logic as PufferCard.setConfig
-    // so the editor's schema (checkboxes, dropdowns) always reflects what the
-    // card will actually render — these are two separate instances with two
-    // separate config copies, so the same logic has to run in both places.
-    const merged = {
-      min_temp: 20, max_temp: 80, layout: "normal", show_labels: true,
-      icon: "", icon_mode: "beside",
-      show_chart: false, chart_hours: 24, chart_position: "below",
-      chart_style: "area",
-      ...config,
-    };
-    if (!Array.isArray(merged.chart_sensors) || merged.chart_sensors.length === 0) {
-      merged.chart_sensors = POSITIONS
-        .map((p) => p.key)
-        .filter((k) => merged[k]?.entity);
-    }
-    this._config = merged;
-  }
-
-  _loadI18n() {
-    this._reqLangs = this._reqLangs || new Set();
-    langCandidates(this.hass).forEach((l) => {
-      if (this._reqLangs.has(l)) return;
-      this._reqLangs.add(l);
-      loadLanguage(l).then(() => this.requestUpdate());
-    });
-  }
-
-  _schema() {
-    const sub = [
-      { name: "entity", selector: { entity: { domain: ["sensor", "number", "input_number"] } } },
-      { name: "label",  selector: { text: {} } },
-    ];
-
-    // Chart sensors: only show keys that have a configured entity
-    const sensorOptions = POSITIONS
-      .filter((p) => this._config?.[p.key]?.entity)
-      .map((p) => ({
-        value: p.key,
-        label: this._config[p.key]?.label || localize(this.hass, p.labelKey),
-      }));
-
-    const chartSchema = this._config?.show_chart ? [
-      {
-        name: "chart_position",
-        selector: { select: { mode: "dropdown", options: [
-          { value: "below", label: localize(this.hass, "chart_below") },
-          { value: "above", label: localize(this.hass, "chart_above") },
-        ]}},
-      },
-      {
-        name: "chart_hours",
-        selector: { select: { mode: "dropdown", options:
-          HOUR_OPTIONS.map((h) => ({ value: h, label: `${h}h` })),
-        }},
-      },
-      {
-        name: "chart_style",
-        selector: { select: { mode: "dropdown", options: [
-          { value: "area", label: localize(this.hass, "chart_style_area") },
-          { value: "line", label: localize(this.hass, "chart_style_line") },
-        ]}},
-      },
-      ...(sensorOptions.length > 1 ? [{
-        name: "chart_sensors",
-        selector: { select: { mode: "list", multiple: true, options: sensorOptions } },
-      }] : []),
-    ] : [];
-
-    return [
-      { name: "name", selector: { text: {} } },
-      { name: "icon", selector: { icon: {} } },
-      {
-        name: "icon_mode",
-        selector: { select: { mode: "dropdown", options: [
-          { value: "beside",  label: localize(this.hass, "icon_mode_beside")  },
-          { value: "replace", label: localize(this.hass, "icon_mode_replace") },
-        ]}},
-      },
-      { name: "layout", selector: { select: { mode: "dropdown", options: [
-        { value: "normal",  label: localize(this.hass, "layout_normal")  },
-        { value: "compact", label: localize(this.hass, "layout_compact") },
-      ]}}},
-      { name: "show_labels", selector: { boolean: {} } },
-      { type: "grid", schema: [
-        { name: "min_temp", selector: { number: { mode: "box", step: 1, unit_of_measurement: "°C" } } },
-        { name: "max_temp", selector: { number: { mode: "box", step: 1, unit_of_measurement: "°C" } } },
-      ]},
-      { name: "top",    type: "expandable", title: localize(this.hass, "pos_top"),    expanded: true, schema: sub },
-      { name: "middle", type: "expandable", title: localize(this.hass, "pos_middle"), schema: sub },
-      { name: "extra",  type: "expandable", title: localize(this.hass, "pos_extra"),  schema: sub },
-      { name: "bottom", type: "expandable", title: localize(this.hass, "pos_bottom"), schema: sub },
-      { name: "show_chart", selector: { boolean: {} } },
-      ...chartSchema,
-    ];
-  }
-
-  _computeLabel = (schema) => {
-    // Keys that map directly to a translation entry.
-    const FIELD_KEYS = new Set([
-      "name", "icon", "icon_mode", "layout", "show_labels",
-      "min_temp", "max_temp", "entity", "label",
-      "show_chart", "chart_position", "chart_hours", "chart_style", "chart_sensors",
-    ]);
-    if (FIELD_KEYS.has(schema.name)) return localize(this.hass, schema.name);
-    // Expandable section titles are provided directly in the schema; fall through.
-    return schema.title ?? schema.name;
-  };
-
-  _valueChanged(ev) {
-    ev.stopPropagation();
-    const config = { ...ev.detail.value };
-    if (!config.type) config.type = "custom:puffer-card";
-    fireEvent(this, "config-changed", { config });
-  }
-
-  render() {
-    if (!this._config || !this.hass) return html``;
-    this._loadI18n();
-    return html`
+    `}},mt=class extends w{constructor(){super(...arguments);yt(this,"_computeLabel",e=>new Set(["name","icon","icon_mode","layout","show_labels","min_temp","max_temp","entity","label","show_chart","chart_position","chart_hours","chart_style","chart_sensors"]).has(e.name)?u(this.hass,e.name):e.title??e.name)}static get properties(){return{hass:{attribute:!1},_config:{state:!0}}}setConfig(e){let s={min_temp:20,max_temp:80,layout:"normal",show_labels:!0,icon:"",icon_mode:"beside",show_chart:!1,chart_hours:24,chart_position:"below",chart_style:"area",...e};(!Array.isArray(s.chart_sensors)||s.chart_sensors.length===0)&&(s.chart_sensors=S.map(o=>o.key).filter(o=>s[o]?.entity)),this._config=s}_schema(){let e=[{name:"entity",selector:{entity:{domain:["sensor","number","input_number"]}}},{name:"label",selector:{text:{}}}],s=S.filter(i=>this._config?.[i.key]?.entity).map(i=>({value:i.key,label:this._config[i.key]?.label||u(this.hass,i.labelKey)})),o=this._config?.show_chart?[{name:"chart_position",selector:{select:{mode:"dropdown",options:[{value:"below",label:u(this.hass,"chart_below")},{value:"above",label:u(this.hass,"chart_above")}]}}},{name:"chart_hours",selector:{select:{mode:"dropdown",options:ce.map(i=>({value:i,label:`${i}h`}))}}},{name:"chart_style",selector:{select:{mode:"dropdown",options:[{value:"area",label:u(this.hass,"chart_style_area")},{value:"line",label:u(this.hass,"chart_style_line")}]}}},...s.length>1?[{name:"chart_sensors",selector:{select:{mode:"list",multiple:!0,options:s}}}]:[]]:[];return[{name:"name",selector:{text:{}}},{name:"icon",selector:{icon:{}}},{name:"icon_mode",selector:{select:{mode:"dropdown",options:[{value:"beside",label:u(this.hass,"icon_mode_beside")},{value:"replace",label:u(this.hass,"icon_mode_replace")}]}}},{name:"layout",selector:{select:{mode:"dropdown",options:[{value:"normal",label:u(this.hass,"layout_normal")},{value:"compact",label:u(this.hass,"layout_compact")}]}}},{name:"show_labels",selector:{boolean:{}}},{type:"grid",schema:[{name:"min_temp",selector:{number:{mode:"box",step:1,unit_of_measurement:"\xB0C"}}},{name:"max_temp",selector:{number:{mode:"box",step:1,unit_of_measurement:"\xB0C"}}}]},{name:"top",type:"expandable",title:u(this.hass,"pos_top"),expanded:!0,schema:e},{name:"middle",type:"expandable",title:u(this.hass,"pos_middle"),schema:e},{name:"extra",type:"expandable",title:u(this.hass,"pos_extra"),schema:e},{name:"bottom",type:"expandable",title:u(this.hass,"pos_bottom"),schema:e},{name:"show_chart",selector:{boolean:{}}},...o]}_valueChanged(e){e.stopPropagation();let s={...e.detail.value};s.type||(s.type="custom:puffer-card"),It(this,"config-changed",{config:s})}render(){return!this._config||!this.hass?y``:y`
       <ha-form .hass=${this.hass} .data=${this._config} .schema=${this._schema()}
                .computeLabel=${this._computeLabel}
-               @value-changed=${this._valueChanged}></ha-form>`;
-  }
-}
+               @value-changed=${this._valueChanged}></ha-form>`}};customElements.define("puffer-card",_t);customElements.define("puffer-card-editor",mt);window.customCards=window.customCards||[];window.customCards.push({type:"puffer-card",name:"Puffer Card",description:"Represents a buffer tank / boiler with 1-4 temperatures at different heights.",preview:!0,documentationURL:"https://github.com/naked-head/puffer-card"});console.info(`%c PUFFER-CARD %c v${re} `,"color:white;background:#1e88e5;font-weight:700;","color:#1e88e5;background:white;font-weight:700;");
+/*! Bundled license information:
 
-/* -------------------------------------------------------------------------- */
-/*  Registration                                                              */
-/* -------------------------------------------------------------------------- */
+@lit/reactive-element/css-tag.js:
+  (**
+   * @license
+   * Copyright 2019 Google LLC
+   * SPDX-License-Identifier: BSD-3-Clause
+   *)
 
-customElements.define("puffer-card", PufferCard);
-customElements.define("puffer-card-editor", PufferCardEditor);
+@lit/reactive-element/reactive-element.js:
+lit-html/lit-html.js:
+lit-element/lit-element.js:
+  (**
+   * @license
+   * Copyright 2017 Google LLC
+   * SPDX-License-Identifier: BSD-3-Clause
+   *)
 
-loadLanguage("en");
-
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "puffer-card",
-  name: "Puffer Card",
-  description: "Represents a buffer tank / boiler with 1-4 temperatures at different heights.",
-  preview: true,
-  documentationURL: "https://github.com/naked-head/puffer-card",
-});
-
-console.info(
-  `%c PUFFER-CARD %c v${VERSION} `,
-  "color:white;background:#1e88e5;font-weight:700;",
-  "color:#1e88e5;background:white;font-weight:700;"
-);
+lit-html/is-server.js:
+  (**
+   * @license
+   * Copyright 2022 Google LLC
+   * SPDX-License-Identifier: BSD-3-Clause
+   *)
+*/
