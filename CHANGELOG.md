@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-25
+
+### Added
+- `dist/puffer-card.js` is now attached as a release asset. HACS installs that
+  single file directly instead of downloading the repository source, which
+  enables the download counter in HACS and makes installs smaller and faster.
+  Made possible by 1.4.0, where the card became self-contained: with Lit and
+  the translations bundled in, there is nothing else left to download.
+- The version reported in the browser console now carries the full tag,
+  pre-release suffix included (for example `v1.5.0-beta.1`), because the asset
+  is built from the tag rather than from `package.json`. Useful when checking
+  which build an instance is actually running.
+
 ### Fixed
 - The license badge in the README no longer renders as a broken image. It used
   the GitHub-API-backed shields.io endpoint, which can fail to answer; since
@@ -19,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - README: documented that the card is available directly in HACS, with install
   steps that no longer mention adding a custom repository, and the badge now
   reads "HACS Default" instead of "HACS Custom".
+- Manual installs can now download `puffer-card.js` straight from the release
+  page instead of copying it out of the repository.
 
 ## [1.4.0] - 2026-08-25
 
@@ -189,7 +204,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shows raw keys.
 - Theme-aware styling.
 
-[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/naked-head/puffer-card/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/naked-head/puffer-card/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/naked-head/puffer-card/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/naked-head/puffer-card/compare/v1.2.2...v1.2.3

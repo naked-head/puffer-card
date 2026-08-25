@@ -45,9 +45,11 @@ so there is no custom repository to add.
 
 ### Manual
 
-1. Copy `dist/puffer-card.js` to `/config/www/puffer-card/puffer-card.js`.
-   That single file is all you need: Lit and every translation are bundled
-   inside it, so the card works offline and pulls nothing from a CDN.
+1. Download `puffer-card.js` from the
+   [latest release](https://github.com/naked-head/puffer-card/releases/latest)
+   and copy it to `/config/www/puffer-card/puffer-card.js`. That single file is
+   all you need: Lit and every translation are bundled inside it, so the card
+   works offline and pulls nothing from a CDN.
 2. Go to **Settings → Dashboards → ⋮ → Resources → Add resource**:
    - URL: `/local/puffer-card/puffer-card.js`
    - Type: **JavaScript Module**

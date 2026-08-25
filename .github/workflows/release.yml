@@ -18,10 +18,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # No asset is attached yet. Attaching one flips HACS to single-file
-      # installs (repositories/plugin.py::update_filenames), which is only safe
-      # now that the card bundles its own translations — that switch is a
-      # separate, deliberate change.
+      # dist/puffer-card.js is attached as a release asset. Because its name
+      # matches "filename" in hacs.json, HACS sets content.path.remote to
+      # "release" and content.single to True
+      # (repositories/plugin.py::update_filenames), so it installs that single
+      # file instead of downloading dist/ from the tagged source. This is only
+      # correct because the card bundles Lit and its translations: dist/ must
+      # never gain a second file that users would need.
+      #
+      # To roll back, publish a later release without an asset: HACS falls
+      # back to installing from the tagged source.
 
       - name: Resolve version from tag
         id: version
@@ -71,6 +77,24 @@ jobs:
 
       - name: Verify translations are in the bundle
         run: node scripts/check-translations.js
+
+      # A rename here would silently break HACS installs: the asset would no
+      # longer match hacs.json and HACS would quietly go back to installing
+      # from source. Fail loudly instead.
+      - name: Verify the built file matches hacs.json filename
+        run: |
+          EXPECTED="$(node -p "require('./hacs.json').filename")"
+          ACTUAL="$(basename dist/puffer-card.js)"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::hacs.json filename is '$EXPECTED' but the built asset is '$ACTUAL'."
+            exit 1
+          fi
+          if [ "$(find dist -type f | wc -l)" -ne 1 ]; then
+            echo "::error::dist/ must contain exactly one file: HACS installs only the release asset."
+            find dist -type f
+            exit 1
+          fi
+          echo "Asset name '$ACTUAL' matches hacs.json, dist/ holds a single file."
 
       - name: Extract release notes from CHANGELOG.md
         id: changelog
@@ -154,6 +178,9 @@ jobs:
           # pre-releases, so HACS only offers them to users who enabled
           # "Show beta versions".
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # Built above with the tag version, so the asset reports the full tag
+          # (v1.5.0-beta.1) rather than package.json's base version.
+          files: dist/puffer-card.js
           body: ${{ steps.changelog.outputs.notes }}
           # Only fall back to GitHub's auto-generated "Full Changelog" notes
           # when no matching CHANGELOG.md section was found.
