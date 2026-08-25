@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- The license badge and the LICENSE link no longer break when the README is
+  rendered inside HACS. Both used a relative target (`LICENSE`), and HACS
+  prefixes relative paths with the repository's raw base URL, which produced
+  an invalid address. They now point at the file on GitHub, matching the other
+  three badges.
+
 ## [1.5.0] - 2026-08-25
 
 ### Added
