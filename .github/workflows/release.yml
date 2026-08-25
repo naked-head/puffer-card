@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # Manual fallback: pick the tag under "Use workflow from" to (re)create its
+  # release, e.g. after a GitHub Actions outage swallowed the tag push event.
+  workflow_dispatch:
 
 jobs:
   release:
@@ -20,18 +23,37 @@ jobs:
       # Make sure the VERSION constant in dist/puffer-card.js matches the tag
       # before creating the tag.
 
+      - name: Resolve version from tag
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "::error::This workflow must run on a tag ref, got '${{ github.ref_name }}'."
+            exit 1
+          fi
+
+          # v1.4.0-beta.1 -> VERSION=1.4.0-beta.1, BASE_VERSION=1.4.0
+          # Pre-release notes live under the final version's CHANGELOG section,
+          # so lookups always use BASE_VERSION.
+          VERSION="${GITHUB_REF_NAME#v}"
+          BASE_VERSION="${VERSION%%-*}"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Tag $GITHUB_REF_NAME -> version=$VERSION, base=$BASE_VERSION"
+
       - name: Extract release notes from CHANGELOG.md
         id: changelog
+        env:
+          BASE_VERSION: ${{ steps.version.outputs.base_version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-
-          # Grab everything between "## [VERSION]" and the next "## [" heading,
-          # or the block of [x.y.z]: link references at the end of the file
-          # (whichever comes first), then drop the heading line itself.
-          NOTES="$(awk -v ver="$VERSION" '
+          # Grab everything between "## [BASE_VERSION]" and the next "## ["
+          # heading, or the block of link definitions at the end of the file
+          # ("[x.y.z]: https://..."), whichever comes first, then drop the
+          # heading line itself.
+          NOTES="$(awk -v ver="$BASE_VERSION" '
             $0 ~ "^## \\[" ver "\\]" { found=1; next }
-            found && /^## \[/  { exit }
-            found && /^\[1\./  { exit }
+            found && /^## \[/     { exit }
+            found && /^\[[^]]+\]:/ { exit }
             found { print }
           ' CHANGELOG.md)"
 
@@ -42,7 +64,7 @@ jobs:
             -e '/./,$!d' -e ':a' -e '/^\n*$/{$d;N;ba' -e '}')"
 
           if [ -z "$NOTES" ]; then
-            echo "::warning::No CHANGELOG.md entry found for version $VERSION, falling back to auto-generated notes."
+            echo "::warning::No CHANGELOG.md entry found for version $BASE_VERSION, falling back to auto-generated notes."
             echo "found=false" >> "$GITHUB_OUTPUT"
           else
             echo "found=true" >> "$GITHUB_OUTPUT"
@@ -59,7 +81,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: "Puffer Card ${{ github.ref_name }}"
           draft: false
-          prerelease: false
+          # Tags carrying a pre-release suffix (v1.4.0-beta.1) are published as
+          # pre-releases, so HACS only offers them to users who enabled
+          # "Show beta versions".
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body: ${{ steps.changelog.outputs.notes }}
           # Only fall back to GitHub's auto-generated "Full Changelog" notes
           # when no matching CHANGELOG.md section was found.
