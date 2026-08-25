@@ -1,9 +1,9 @@
 # Puffer Card
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/default)
 [![GitHub Release](https://img.shields.io/github/release/naked-head/puffer-card.svg)](https://github.com/naked-head/puffer-card/releases)
 [![Validate](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml/badge.svg)](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml)
-[![License](https://img.shields.io/github/license/naked-head/puffer-card.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A custom [Home Assistant](https://www.home-assistant.io/) **Lovelace card** that
 visually represents a **buffer tank / hot-water cylinder** (a "puffer") used for
@@ -35,9 +35,12 @@ heights and colors the tank according to the real thermal stratification.
 
 ### HACS (recommended)
 
-1. Open **HACS** → top-right menu → **Custom repositories**.
-2. Add `https://github.com/naked-head/puffer-card` with category **Dashboard**.
-3. Search for **Puffer Card**, install it, and reload.
+Puffer Card is part of the [HACS default repositories](https://github.com/hacs/default),
+so there is no custom repository to add.
+
+1. Open **HACS** in Home Assistant.
+2. Search for **Puffer Card** and open it.
+3. Click **Download**, then reload your browser.
 4. The Lovelace resource is registered automatically.
 
 ### Manual

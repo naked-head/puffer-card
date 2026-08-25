@@ -5,6 +5,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- The license badge in the README no longer renders as a broken image. It used
+  the GitHub-API-backed shields.io endpoint, which can fail to answer; since
+  the license never changes, it is now a static badge.
+- Release notes on GitHub no longer show ragged mid-sentence line breaks.
+  `CHANGELOG.md` is hard-wrapped at ~80 columns, and GitHub renders release
+  bodies with hard line breaks (every newline becomes a `<br>`), unlike `.md`
+  files in the repo. The release workflow now unwraps paragraphs before
+  publishing them.
+
+### Changed
+- README: documented that the card is available directly in HACS, with install
+  steps that no longer mention adding a custom repository, and the badge now
+  reads "HACS Default" instead of "HACS Custom".
+
 ## [1.4.0] - 2026-08-25
 
 ### Changed
