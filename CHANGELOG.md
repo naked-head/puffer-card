@@ -5,6 +5,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-25
+
+### Changed
+- The card is now a single self-contained bundle. `dist/puffer-card.js` is
+  generated from `src/` with [esbuild](https://esbuild.github.io/) instead of
+  being hand-written, and includes everything it needs at runtime.
+- Lit is bundled into the card instead of being imported from a CDN
+  (`cdn.jsdelivr.net`) on first load. The card now works on installations
+  without internet access, no longer depends on a third-party host staying
+  available, and loads one fewer external resource. Despite embedding Lit, the
+  built file is slightly smaller than the previous hand-written source.
+- Translations are compiled into the bundle instead of being fetched at runtime
+  from `dist/translations/`. Language lookups are synchronous, so the editor
+  and the card no longer re-render once translations arrive.
+- Translation sources moved from `dist/translations/` to `src/translations/`,
+  with `src/i18n.js` as the single registry of shipped languages.
+- The version string is injected at build time from the git tag, removing the
+  manual step of keeping the `VERSION` constant in sync before tagging.
+- `scripts/check-translations.js` now validates the new layout: that
+  `src/i18n.js` and `src/translations/` agree with each other, and that every
+  language is actually present in the built bundle.
+- **Manual installs:** copying `dist/puffer-card.js` on its own is now enough.
+  The `translations/` folder next to it is no longer read and can be deleted.
+  HACS installs are unaffected and upgrade normally.
+
+### Removed
+- `dist/translations/` (moved to `src/translations/` and bundled).
+- `dist/translations/index.json`: the list of shipped languages now lives in
+  `src/i18n.js`, so there is no second manifest that can fall out of sync.
+- The inline `FALLBACK_EN` table in the source. `en.json` is guaranteed to be
+  in the bundle, so the duplicate copy of the English strings — which could
+  silently drift from `en.json` — is no longer needed.
+
 ## [1.3.0] - 2026-07-05
 
 ### Added
@@ -141,7 +174,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shows raw keys.
 - Theme-aware styling.
 
-[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/naked-head/puffer-card/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/naked-head/puffer-card/compare/v1.2.3...v1.3.0
 [1.2.3]: https://github.com/naked-head/puffer-card/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/naked-head/puffer-card/compare/v1.2.1...v1.2.2

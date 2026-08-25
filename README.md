@@ -42,24 +42,16 @@ heights and colors the tank according to the real thermal stratification.
 
 ### Manual
 
-1. Copy the `dist/` content so that `puffer-card.js` and the `translations/`
-   folder stay together, e.g. `/config/www/puffer-card/`:
-   ```
-   /config/www/puffer-card/
-   ├── puffer-card.js
-   └── translations/
-       ├── index.json
-       ├── en.json
-       └── it.json
-   ```
+1. Copy `dist/puffer-card.js` to `/config/www/puffer-card/puffer-card.js`.
+   That single file is all you need: Lit and every translation are bundled
+   inside it, so the card works offline and pulls nothing from a CDN.
 2. Go to **Settings → Dashboards → ⋮ → Resources → Add resource**:
    - URL: `/local/puffer-card/puffer-card.js`
    - Type: **JavaScript Module**
 3. Reload the page.
 
-> Keep the folder structure intact: the card loads its translation files
-> relative to its own URL. The Lit framework is loaded from a CDN on first run
-> and then cached by the browser.
+> Upgrading from 1.3.0 or earlier? The old `translations/` folder next to
+> `puffer-card.js` is no longer read and can be deleted.
 
 ## Configuration
 
@@ -183,27 +175,48 @@ The UI language follows Home Assistant's own language setting, with English
 as the fallback when a translation is missing or a language isn't available
 at all.
 
-Translations live under `dist/translations/`: one JSON file per language,
-plus an `index.json` manifest listing which languages are shipped.
+Translations live under `src/translations/`: one JSON file per language.
+They are compiled into `dist/puffer-card.js` at build time, so the card never
+fetches them at runtime.
 
 ```
-dist/translations/
-├── index.json   # { "en": "English", "it": "Italiano" }
-├── en.json      # reference language — every key must exist here
-└── it.json
+src/
+├── i18n.js              # registry: which languages ship with the card
+└── translations/
+    ├── en.json          # reference language — every key must exist here
+    └── it.json
 ```
 
-**To contribute a new language**, no code changes are needed:
+**To contribute a new language:**
 
-1. Copy `en.json` to `<code>.json` (use the language's
-   [IETF tag](https://www.home-assistant.io/integrations/frontend/#language),
+1. Copy `src/translations/en.json` to `src/translations/<code>.json` (use the
+   language's [IETF tag](https://www.home-assistant.io/integrations/frontend/#language),
    e.g. `de.json` for German) and translate the values — keep the keys as-is.
-2. Add an entry to `index.json`: `"de": "Deutsch"`.
-3. Run `node scripts/check-translations.js` to confirm every key from
-   `en.json` is present (missing keys don't break anything — they silently
-   fall back to English — but the script helps catch typos and gaps before
-   opening a PR). The same check runs automatically in CI.
-4. Open a pull request.
+2. Register it in `src/i18n.js`: add the `import` line and the entry in
+   `TRANSLATIONS`.
+3. Run `npm run check` — this rebuilds the bundle and verifies that the
+   registry, the files on disk and the built bundle all agree, and that no key
+   from `en.json` is missing. (Missing keys don't break anything: they silently
+   fall back to English. The script catches typos and gaps before you open a
+   PR.) The same check runs automatically in CI.
+4. Commit the regenerated `dist/puffer-card.js` along with your changes, then
+   open a pull request.
+
+## Development
+
+The card is bundled with [esbuild](https://esbuild.github.io/). `src/` is the
+source of truth; `dist/puffer-card.js` is generated and committed.
+
+```bash
+npm install       # once
+npm run build     # src/ -> dist/puffer-card.js
+npm run check     # build, then validate translations and the bundle
+```
+
+Always commit the rebuilt `dist/puffer-card.js` together with any change under
+`src/`: CI fails if the two are out of sync. The version string is injected at
+build time — from the git tag on releases, from `package.json` otherwise — so
+there is no version constant to edit by hand in the source.
 
 ## Color scale
 

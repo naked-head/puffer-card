@@ -1,60 +1,103 @@
 #!/usr/bin/env node
 /**
- * Validates the translation files under dist/translations/.
+ * Validates the translation files under src/translations/.
  *
  * Checks:
- * 1. Every language listed in index.json has a corresponding <lang>.json file.
- * 2. Every <lang>.json file listed in index.json exists in index.json (no orphans).
- * 3. Every key present in en.json (the reference language) exists in every
- *    other language file. Missing keys are not fatal — the card falls back
- *    to English at runtime — but they are reported so contributors can spot
- *    incomplete translations before opening a PR.
+ * 1. Registry consistency — every language imported in src/i18n.js has a
+ *    matching src/translations/<lang>.json file, and every file in that folder
+ *    is registered in src/i18n.js (no orphans in either direction).
+ * 2. Key completeness — every key present in en.json (the reference language)
+ *    exists in every other language file, with no unused extra keys. Missing
+ *    keys are not fatal (the card falls back to English at runtime) but are
+ *    reported so contributors can spot incomplete translations before opening
+ *    a PR.
+ * 3. Bundle contents — if dist/puffer-card.js exists, a sample string from
+ *    every language must actually be present inside it. This is the check that
+ *    guards the single-file release: translations are no longer fetched at
+ *    runtime, so if they are not in the bundle they do not exist at all.
+ *
+ * Run `npm run build` first so that check 3 has something to inspect;
+ * `npm run check` does both in order.
  *
  * Usage: node scripts/check-translations.js
  * Exit code: 0 if OK (warnings allowed), 1 if a structural error is found
- * (missing file, invalid JSON, or index.json out of sync with the folder).
+ * (missing file, invalid JSON, registry out of sync, or a language missing
+ * from the built bundle).
  */
 
-const fs = require("fs");
-const path = require("path");
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const TRANSLATIONS_DIR = path.join(__dirname, "..", "dist", "translations");
-const INDEX_PATH = path.join(TRANSLATIONS_DIR, "index.json");
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const TRANSLATIONS_DIR = path.join(ROOT, "src", "translations");
+const I18N_PATH = path.join(ROOT, "src", "i18n.js");
+const BUNDLE_PATH = path.join(ROOT, "dist", "puffer-card.js");
 const REFERENCE_LANG = "en";
 
 function readJson(filePath) {
-  const raw = fs.readFileSync(filePath, "utf8");
-  return JSON.parse(raw);
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+/**
+ * Extracts the language codes registered in src/i18n.js by reading its
+ * `import <lang> from "./translations/<lang>.json";` lines.
+ */
+function readRegistry() {
+  const source = fs.readFileSync(I18N_PATH, "utf8");
+  const re = /import\s+\w+\s+from\s+["']\.\/translations\/([\w-]+)\.json["']/g;
+  const langs = [];
+  let m;
+  while ((m = re.exec(source)) !== null) langs.push(m[1]);
+  return langs;
+}
+
+/** Picks a distinctive value from a dictionary to grep for in the bundle. */
+function sampleValue(dict) {
+  const values = Object.values(dict).filter(
+    (v) => typeof v === "string" && v.length >= 4
+  );
+  // Longest value: least likely to collide with unrelated bundle content.
+  return values.sort((a, b) => b.length - a.length)[0] || null;
 }
 
 function main() {
   let hasError = false;
   let hasWarning = false;
 
-  if (!fs.existsSync(INDEX_PATH)) {
-    console.error(`Missing ${INDEX_PATH}`);
+  if (!fs.existsSync(TRANSLATIONS_DIR)) {
+    console.error(`Missing ${TRANSLATIONS_DIR}`);
     process.exit(1);
   }
-  const index = readJson(INDEX_PATH);
-  const declaredLangs = Object.keys(index);
+  if (!fs.existsSync(I18N_PATH)) {
+    console.error(`Missing ${I18N_PATH}`);
+    process.exit(1);
+  }
 
-  // Every declared language must have a matching file.
-  for (const lang of declaredLangs) {
-    const filePath = path.join(TRANSLATIONS_DIR, `${lang}.json`);
-    if (!fs.existsSync(filePath)) {
-      console.error(`index.json declares "${lang}" but ${lang}.json is missing`);
+  /* -- 1. registry consistency -------------------------------------------- */
+
+  const registeredLangs = readRegistry();
+  if (registeredLangs.length === 0) {
+    console.error("src/i18n.js does not import any translation file");
+    process.exit(1);
+  }
+
+  const filesOnDisk = fs
+    .readdirSync(TRANSLATIONS_DIR)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""));
+
+  for (const lang of registeredLangs) {
+    if (!filesOnDisk.includes(lang)) {
+      console.error(`src/i18n.js imports "${lang}" but ${lang}.json is missing`);
       hasError = true;
     }
   }
-
-  // Every .json file in the folder (except index.json) should be declared.
-  const filesOnDisk = fs
-    .readdirSync(TRANSLATIONS_DIR)
-    .filter((f) => f.endsWith(".json") && f !== "index.json")
-    .map((f) => f.replace(/\.json$/, ""));
   for (const lang of filesOnDisk) {
-    if (!declaredLangs.includes(lang)) {
-      console.error(`${lang}.json exists but is not declared in index.json`);
+    if (!registeredLangs.includes(lang)) {
+      console.error(
+        `${lang}.json exists but is not imported in src/i18n.js — it would not ship in the bundle`
+      );
       hasError = true;
     }
   }
@@ -64,21 +107,28 @@ function main() {
     process.exit(1);
   }
 
-  const reference = readJson(path.join(TRANSLATIONS_DIR, `${REFERENCE_LANG}.json`));
-  const referenceKeys = new Set(Object.keys(reference));
+  /* -- 2. key completeness ------------------------------------------------ */
 
+  const dicts = {};
   for (const lang of filesOnDisk) {
-    if (lang === REFERENCE_LANG) continue;
-    const filePath = path.join(TRANSLATIONS_DIR, `${lang}.json`);
-    let dict;
     try {
-      dict = readJson(filePath);
+      dicts[lang] = readJson(path.join(TRANSLATIONS_DIR, `${lang}.json`));
     } catch (err) {
       console.error(`${lang}.json is not valid JSON: ${err.message}`);
       hasError = true;
-      continue;
     }
-    const dictKeys = new Set(Object.keys(dict));
+  }
+
+  if (!dicts[REFERENCE_LANG]) {
+    console.error(`Reference language "${REFERENCE_LANG}.json" could not be parsed`);
+    process.exit(1);
+  }
+
+  const referenceKeys = new Set(Object.keys(dicts[REFERENCE_LANG]));
+
+  for (const lang of filesOnDisk) {
+    if (lang === REFERENCE_LANG || !dicts[lang]) continue;
+    const dictKeys = new Set(Object.keys(dicts[lang]));
     const missing = [...referenceKeys].filter((k) => !dictKeys.has(k));
     const extra = [...dictKeys].filter((k) => !referenceKeys.has(k));
 
@@ -94,6 +144,38 @@ function main() {
       console.log(`[${lang}] OK — ${dictKeys.size} keys, matches en.json`);
     }
   }
+  console.log(`[${REFERENCE_LANG}] reference — ${referenceKeys.size} keys`);
+
+  /* -- 3. bundle contents ------------------------------------------------- */
+
+  if (!fs.existsSync(BUNDLE_PATH)) {
+    console.warn(
+      "\ndist/puffer-card.js not found — skipping bundle check. Run `npm run build` first."
+    );
+    hasWarning = true;
+  } else {
+    const bundle = fs.readFileSync(BUNDLE_PATH, "utf8");
+    for (const lang of filesOnDisk) {
+      if (!dicts[lang]) continue;
+      const sample = sampleValue(dicts[lang]);
+      if (!sample) {
+        console.warn(`[${lang}] no sample string long enough to check in the bundle`);
+        hasWarning = true;
+        continue;
+      }
+      if (bundle.includes(sample)) {
+        console.log(`[${lang}] present in dist/puffer-card.js`);
+      } else {
+        console.error(
+          `[${lang}] NOT found in dist/puffer-card.js (looked for ${JSON.stringify(sample)}) — ` +
+            "the bundle is stale, or the language is not registered in src/i18n.js"
+        );
+        hasError = true;
+      }
+    }
+  }
+
+  /* -- verdict ------------------------------------------------------------ */
 
   if (hasError) {
     console.error("\nTranslation check FAILED (structural error).");
@@ -102,7 +184,7 @@ function main() {
   if (hasWarning) {
     console.warn("\nTranslation check completed with warnings (see above).");
   } else {
-    console.log("\nAll translation files are complete and in sync.");
+    console.log("\nAll translation files are complete, registered and bundled.");
   }
 }
 
