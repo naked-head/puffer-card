@@ -80,18 +80,22 @@ jobs:
 
       # A rename here would silently break HACS installs: the asset would no
       # longer match hacs.json and HACS would quietly go back to installing
-      # from source. Fail loudly instead.
+      # from source. Fail loudly instead. The actual name is read from what the
+      # build produced, not from a hardcoded path — otherwise the comparison
+      # checks a literal against itself and can never fail.
       - name: Verify the built file matches hacs.json filename
         run: |
-          EXPECTED="$(node -p "require('./hacs.json').filename")"
-          ACTUAL="$(basename dist/puffer-card.js)"
-          if [ "$EXPECTED" != "$ACTUAL" ]; then
-            echo "::error::hacs.json filename is '$EXPECTED' but the built asset is '$ACTUAL'."
+          mapfile -t FILES < <(find dist -type f | sort)
+          if [ "${#FILES[@]}" -ne 1 ]; then
+            echo "::error::dist/ must contain exactly one file: HACS installs only the release asset."
+            printf '%s\n' "${FILES[@]}"
             exit 1
           fi
-          if [ "$(find dist -type f | wc -l)" -ne 1 ]; then
-            echo "::error::dist/ must contain exactly one file: HACS installs only the release asset."
-            find dist -type f
+
+          EXPECTED="$(node -p "require('./hacs.json').filename")"
+          ACTUAL="$(basename "${FILES[0]}")"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::hacs.json filename is '$EXPECTED' but the built asset is '$ACTUAL'."
             exit 1
           fi
           echo "Asset name '$ACTUAL' matches hacs.json, dist/ holds a single file."
