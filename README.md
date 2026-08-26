@@ -31,8 +31,6 @@ heights and colors the tank according to the real thermal stratification.
 
 ## Installation
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=naked-head&repository=puffer-card&category=plugin)
-
 ### HACS (recommended)
 
 Puffer Card is part of the [HACS default repositories](https://github.com/hacs/default),
