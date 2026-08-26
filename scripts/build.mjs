@@ -41,6 +41,11 @@ await esbuild.build({
   format: "esm",
   target: "es2021",
   minify: true,
+  // Emit accented characters as themselves instead of \uXXXX escapes
+  // (esbuild defaults to charset: "ascii"). Purely cosmetic — the bundle is
+  // loaded as an ES module, which is always decoded as UTF-8 — but it keeps
+  // the translations greppable in dist/ and shaves a few hundred bytes.
+  charset: "utf8",
   // Keeps Lit's BSD-3 license banner at the end of the bundle, as required
   // when redistributing it.
   legalComments: "eof",

@@ -10,6 +10,10 @@ on:
     branches: [main]
   schedule:
     - cron: "0 0 * * *"
+  # Manual trigger: lets you re-validate main without an empty commit, e.g.
+  # after an Actions outage killed a run before any job was assigned — those
+  # runs cannot be re-run, since there is no job to re-run.
+  workflow_dispatch:
 
 jobs:
   validate:
