@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Relicensed from MIT to GPL-3.0-or-later.
+
 ### Fixed
 - The license badge and the LICENSE link no longer break when the README is
   rendered inside HACS. Both used a relative target (`LICENSE`), and HACS
