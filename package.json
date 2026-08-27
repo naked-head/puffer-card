@@ -4,7 +4,7 @@
   "description": "Custom Lovelace card that visually represents a buffer tank / hot-water cylinder with 1 to 4 temperatures placed at different heights.",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/naked-head/puffer-card.git"

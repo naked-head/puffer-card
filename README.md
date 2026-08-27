@@ -3,7 +3,7 @@
 [![HACS Default](https://img.shields.io/badge/HACS-Default-orange.svg)](https://github.com/hacs/default)
 [![GitHub Release](https://img.shields.io/github/release/naked-head/puffer-card.svg)](https://github.com/naked-head/puffer-card/releases)
 [![Validate](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml/badge.svg)](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue)](https://github.com/naked-head/puffer-card/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/naked-head/puffer-card.svg)](https://github.com/naked-head/puffer-card/blob/main/LICENSE)
 
 A custom [Home Assistant](https://www.home-assistant.io/) **Lovelace card** that
 visually represents a **buffer tank / hot-water cylinder** (a "puffer") used for
@@ -229,7 +229,7 @@ match your system so the colors are meaningful for your typical operating range.
 
 ## License
 
-MIT — see [LICENSE](https://github.com/naked-head/puffer-card/blob/main/LICENSE)
+GPL-3.0-or-later — see [LICENSE](https://github.com/naked-head/puffer-card/blob/main/LICENSE)
 
 ## Acknowledgements
 
