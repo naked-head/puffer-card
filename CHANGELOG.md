@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-27
+
 ### Changed
 - Relicensed from MIT to GPL-3.0-or-later.
 
@@ -14,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   prefixes relative paths with the repository's raw base URL, which produced
   an invalid address. They now point at the file on GitHub, matching the other
   three badges.
+- The "Open in HACS" button is back under the badges, where the other cards
+  have it.
 
 ## [1.5.0] - 2026-08-25
 
@@ -214,7 +218,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   shows raw keys.
 - Theme-aware styling.
 
-[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/naked-head/puffer-card/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/naked-head/puffer-card/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/naked-head/puffer-card/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/naked-head/puffer-card/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/naked-head/puffer-card/compare/v1.2.3...v1.3.0

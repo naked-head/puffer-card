@@ -5,6 +5,8 @@
 [![Validate](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml/badge.svg)](https://github.com/naked-head/puffer-card/actions/workflows/validate.yml)
 [![License](https://img.shields.io/github/license/naked-head/puffer-card.svg)](https://github.com/naked-head/puffer-card/blob/main/LICENSE)
 
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=naked-head&repository=puffer-card&category=plugin)
+
 A custom [Home Assistant](https://www.home-assistant.io/) **Lovelace card** that
 visually represents a **buffer tank / hot-water cylinder** (a "puffer") used for
 heating and domestic hot water. It shows up to four temperatures at different
