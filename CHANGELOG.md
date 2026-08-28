@@ -5,7 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [1.5.1] - 2026-08-27
+## [1.5.1] - 2026-08-28
 
 ### Changed
 - Relicensed from MIT to GPL-3.0-or-later.
