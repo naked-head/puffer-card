@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- The release workflow now checks that the README screenshots are pinned to
+  the tag being released, so the README shown in HACS matches the installed
+  version.
+
 ## [1.5.1] - 2026-08-28
 
 ### Changed
