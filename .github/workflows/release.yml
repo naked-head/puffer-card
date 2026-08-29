@@ -80,6 +80,29 @@ jobs:
           done < <(grep -oE 'raw\.githubusercontent\.com/naked-head/puffer-card/[^"]+\.png' README.md | sort -u)
           [ "$bad" -eq 0 ] || exit 1
           echo "README image refs OK."
+      - name: Verify README links are absolute
+        run: |
+          # HACS renders the README through Home Assistant's markdown
+          # sanitiser: relative link targets are blanked (href="") and
+          # relative image sources come out as src="". Anchors (#section) are
+          # fine — they resolve within the rendered document.
+          bad=0
+          for f in README.md; do
+            [ -f "$f" ] || continue
+            while read -r target; do
+              [ -n "$target" ] || continue
+              case "$target" in
+                http://*|https://*|\#*|mailto:*) ;;
+                *) echo "::error::$f: relative target '$target' will be blanked in HACS."; bad=1 ;;
+              esac
+            done < <(
+              { grep -oE '\]\([^)]+\)' "$f" | sed -e 's/^](//' -e 's/)$//'
+                grep -oE '(href|src)="[^"]*"' "$f" | sed -e 's/^[a-z]*="//' -e 's/"$//'
+              } | sort -u
+            )
+          done
+          [ "$bad" -eq 0 ] || exit 1
+          echo "README link targets OK."
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
